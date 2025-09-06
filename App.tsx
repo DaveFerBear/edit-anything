@@ -52,22 +52,27 @@ const Spinner = () => (
 
 const BoundingBox = ({ boxData, imageRef }: { boxData: TextDetectionData, imageRef: React.RefObject<HTMLImageElement> }) => {
     const { box_2d, color } = boxData;
+    const imageEl = imageRef.current;
 
-    if (!box_2d || box_2d.length < 4 || !imageRef.current) {
+    if (!box_2d || box_2d.length < 4 || !imageEl) {
         return null;
     }
     
-    const { naturalWidth, naturalHeight } = imageRef.current;
-    if (naturalWidth === 0 || naturalHeight === 0) {
+    const { naturalWidth, clientWidth } = imageEl;
+    if (naturalWidth === 0 || clientWidth === 0) {
         return null;
     }
 
+    // Since the image's aspect ratio is preserved (w-full, h-auto),
+    // we can use a single scale factor based on the width.
+    const scale = clientWidth / naturalWidth;
+
     const [yMin, xMin, yMax, xMax] = box_2d;
 
-    const top = (yMin / naturalHeight) * 100;
-    const left = (xMin / naturalWidth) * 100;
-    const height = ((yMax - yMin) / naturalHeight) * 100;
-    const width = ((xMax - xMin) / naturalWidth) * 100;
+    const top = yMin * scale;
+    const left = xMin * scale;
+    const height = (yMax - yMin) * scale;
+    const width = (xMax - xMin) * scale;
     
     const borderColor = color || '#34D399';
     const bgColor = borderColor + '33';
@@ -76,10 +81,10 @@ const BoundingBox = ({ boxData, imageRef }: { boxData: TextDetectionData, imageR
       <div 
         className="absolute border-2 rounded-sm pointer-events-none"
         style={{
-          top: `${top}%`,
-          left: `${left}%`,
-          height: `${height}%`,
-          width: `${width}%`,
+          top: `${top}px`,
+          left: `${left}px`,
+          height: `${height}px`,
+          width: `${width}px`,
           borderColor: borderColor,
           backgroundColor: bgColor,
         }}
@@ -88,35 +93,40 @@ const BoundingBox = ({ boxData, imageRef }: { boxData: TextDetectionData, imageR
 };
 
 const TextBox = ({ boxData, imageRef }: { boxData: TextDetectionData, imageRef: React.RefObject<HTMLImageElement> }) => {
-    const { label, box_2d } = boxData;
+    const { label, box_2d, color } = boxData;
+    const imageEl = imageRef.current;
 
-    if (!box_2d || box_2d.length < 4 || !imageRef.current) {
+    if (!box_2d || box_2d.length < 4 || !imageEl) {
         return null;
     }
     
-    const { naturalWidth, naturalHeight } = imageRef.current;
-    if (naturalWidth === 0 || naturalHeight === 0) {
+    const { naturalWidth, clientWidth } = imageEl;
+    if (naturalWidth === 0 || clientWidth === 0) {
         return null;
     }
 
+    // Since the image's aspect ratio is preserved (w-full, h-auto),
+    // we can use a single scale factor based on the width.
+    const scale = clientWidth / naturalWidth;
+    
     const [yMin, xMin, yMax, xMax] = box_2d;
 
-    const top = (yMin / naturalHeight) * 100;
-    const left = (xMin / naturalWidth) * 100;
-    const height = ((yMax - yMin) / naturalHeight) * 100;
-    const width = ((xMax - xMin) / naturalWidth) * 100;
+    const top = yMin * scale;
+    const left = xMin * scale;
+    const height = (yMax - yMin) * scale;
+    const width = (xMax - xMin) * scale;
     
     return (
       <div 
-        className="absolute flex items-center justify-center p-1 bg-black bg-opacity-60 rounded-sm pointer-events-none text-white text-center leading-tight break-words"
+        className="absolute flex items-center justify-center p-1 bg-black bg-opacity-60 rounded-sm pointer-events-none text-center leading-tight break-words"
         style={{
-          top: `${top}%`,
-          left: `${left}%`,
-          height: `${height}%`,
-          width: `${width}%`,
+          top: `${top}px`,
+          left: `${left}px`,
+          height: `${height}px`,
+          width: `${width}px`,
         }}
       >
-        <span>{label}</span>
+        <span style={{ color: color || '#FFFFFF' }}>{label}</span>
       </div>
     );
 };
@@ -130,16 +140,12 @@ export default function App() {
   const [step, setStep] = useState<AppStep>('upload');
   const [textDetections, setTextDetections] = useState<TextDetectionData[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [aspectRatio, setAspectRatio] = useState<string | null>(null);
+  const [imageLoaded, setImageLoaded] = useState(false);
   const [isDecomposing, setIsDecomposing] = useState(false);
   const imageRef = useRef<HTMLImageElement>(null);
 
-  const handleImageLoad = (event: React.SyntheticEvent<HTMLImageElement>) => {
-    const img = event.currentTarget;
-    const { naturalWidth, naturalHeight } = img;
-    if (naturalWidth > 0 && naturalHeight > 0) {
-      setAspectRatio(`${naturalWidth} / ${naturalHeight}`);
-    }
+  const handleImageLoad = () => {
+    setImageLoaded(true);
   };
 
   const handleReset = () => {
@@ -151,7 +157,7 @@ export default function App() {
     setStep('upload');
     setTextDetections([]);
     setError(null);
-    setAspectRatio(null);
+    setImageLoaded(false);
     setIsDecomposing(false);
     const fileInput = document.getElementById('file-upload') as HTMLInputElement;
     if(fileInput) {
@@ -375,19 +381,18 @@ export default function App() {
             <div className="flex flex-col items-center gap-6">
                 <div 
                     className="relative w-full max-w-md"
-                    style={{ aspectRatio: aspectRatio ?? 'auto' }}
                 >
                     <img 
                       ref={imageRef} 
                       src={previewUrl!} 
                       alt="Image preview" 
-                      className="rounded-lg shadow-2xl w-full h-full"
+                      className="rounded-lg shadow-2xl w-full h-auto block"
                       onLoad={handleImageLoad}
                     />
-                    {step === 'result' && textDetections.map((boxData, index) => (
+                    {imageLoaded && step === 'result' && textDetections.map((boxData, index) => (
                        <BoundingBox key={index} boxData={boxData} imageRef={imageRef} />
                     ))}
-                     {step === 'recomposed' && textDetections.map((boxData, index) => (
+                     {imageLoaded && step === 'recomposed' && textDetections.map((boxData, index) => (
                         <TextBox key={index} boxData={boxData} imageRef={imageRef} />
                     ))}
                     <button 
