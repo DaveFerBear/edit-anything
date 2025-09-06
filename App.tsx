@@ -54,8 +54,11 @@ const Spinner = () => (
     </svg>
 );
 
-const OverlayComponent = ({ boxData, renderedSize, children, isBoundingBox, imageNaturalSize }: { boxData: TextDetectionData, renderedSize: { width: number, height: number }, children?: React.ReactNode, isBoundingBox?: boolean, imageNaturalSize?: { width: number, height: number } }) => {
+const OverlayComponent = ({ boxData, renderedSize, children, isBoundingBox, imageNaturalSize, onTextChange, textIndex, onBoxChange }: { boxData: TextDetectionData, renderedSize: { width: number, height: number }, children?: React.ReactNode, isBoundingBox?: boolean, imageNaturalSize?: { width: number, height: number }, onTextChange?: (index: number, newText: string) => void, textIndex?: number, onBoxChange?: (index: number, newBox: [number, number, number, number]) => void }) => {
     const { box_2d } = boxData;
+    const [isDragging, setIsDragging] = useState(false);
+    const [isResizing, setIsResizing] = useState(false);
+    const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
 
     if (!box_2d || box_2d.length < 4 || renderedSize.width === 0 || renderedSize.height === 0) {
         return null;
@@ -91,7 +94,7 @@ const OverlayComponent = ({ boxData, renderedSize, children, isBoundingBox, imag
         style.textAlign = boxData.textAlign as React.CSSProperties['textAlign'] || 'center';
         style.color = boxData.color;
 
-        className += " flex items-center p-1 leading-tight break-words";
+        className += " flex items-center p-1 leading-tight break-words cursor-text hover:border-2 hover:border-blue-400 hover:bg-blue-50/20 transition-all duration-75 pointer-events-auto group";
         
         if (boxData.textAlign === 'left') {
             style.justifyContent = 'flex-start';
@@ -102,9 +105,116 @@ const OverlayComponent = ({ boxData, renderedSize, children, isBoundingBox, imag
         }
     }
 
+    const handleTextEdit = (e: React.FocusEvent<HTMLDivElement>) => {
+        if (onTextChange && textIndex !== undefined) {
+            const newText = e.target.innerText;
+            onTextChange(textIndex, newText);
+        }
+    };
+
+    const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            e.currentTarget.blur();
+        }
+    };
+
+    const handleDragMouseDown = (e: React.MouseEvent) => {
+        if (!onBoxChange || textIndex === undefined || isBoundingBox) return;
+        
+        e.preventDefault();
+        e.stopPropagation();
+        setIsDragging(true);
+        setDragStart({ x: e.clientX, y: e.clientY });
+    };
+
+    const handleMouseMove = (e: MouseEvent) => {
+        if ((!isDragging && !isResizing) || !onBoxChange || textIndex === undefined) return;
+
+        const deltaX = e.clientX - dragStart.x;
+        const deltaY = e.clientY - dragStart.y;
+
+        const normalizedDeltaX = deltaX / renderedSize.width;
+        const normalizedDeltaY = deltaY / renderedSize.height;
+
+        const [yMin, xMin, yMax, xMax] = box_2d;
+
+        if (isDragging) {
+            // Move the entire box
+            const newBox: [number, number, number, number] = [
+                Math.max(0, Math.min(1, yMin + normalizedDeltaY)),
+                Math.max(0, Math.min(1, xMin + normalizedDeltaX)),
+                Math.max(0, Math.min(1, yMax + normalizedDeltaY)),
+                Math.max(0, Math.min(1, xMax + normalizedDeltaX))
+            ];
+            onBoxChange(textIndex, newBox);
+        } else if (isResizing) {
+            // Resize the box (bottom-right corner)
+            const newBox: [number, number, number, number] = [
+                yMin,
+                xMin,
+                Math.max(yMin + 0.05, Math.min(1, yMax + normalizedDeltaY)),
+                Math.max(xMin + 0.05, Math.min(1, xMax + normalizedDeltaX))
+            ];
+            onBoxChange(textIndex, newBox);
+        }
+
+        setDragStart({ x: e.clientX, y: e.clientY });
+    };
+
+    const handleMouseUp = () => {
+        setIsDragging(false);
+        setIsResizing(false);
+    };
+
+    useEffect(() => {
+        if (isDragging || isResizing) {
+            document.addEventListener('mousemove', handleMouseMove);
+            document.addEventListener('mouseup', handleMouseUp);
+            return () => {
+                document.removeEventListener('mousemove', handleMouseMove);
+                document.removeEventListener('mouseup', handleMouseUp);
+            };
+        }
+    }, [isDragging, isResizing, dragStart]);
+
+    const handleResizeMouseDown = (e: React.MouseEvent, direction: string) => {
+        if (!onBoxChange || textIndex === undefined || isBoundingBox) return;
+        
+        e.preventDefault();
+        e.stopPropagation();
+        setIsResizing(true);
+        setDragStart({ x: e.clientX, y: e.clientY });
+    };
+
+    const isEditable = !isBoundingBox && onTextChange !== undefined;
+    const isDraggable = !isBoundingBox && onBoxChange !== undefined;
+
     return (
-      <div className={className} style={style}>
+      <div 
+        className={className} 
+        style={style}
+        contentEditable={isEditable}
+        suppressContentEditableWarning={true}
+        onBlur={handleTextEdit}
+        onKeyDown={handleKeyDown}
+      >
         {children}
+        
+        {isDraggable && (
+          <>
+            {/* Resize handle - bottom right */}
+            <div
+              className="absolute -bottom-1 -right-1 w-3 h-3 bg-blue-500 border border-white rounded-full cursor-se-resize opacity-0 group-hover:opacity-100 transition-opacity duration-75"
+              onMouseDown={(e) => handleResizeMouseDown(e, 'se')}
+            />
+            {/* Drag handle - top left */}
+            <div
+              className="absolute -top-1 -left-1 w-3 h-3 bg-blue-500 border border-white rounded-full cursor-move opacity-0 group-hover:opacity-100 transition-opacity duration-75"
+              onMouseDown={handleDragMouseDown}
+            />
+          </>
+        )}
       </div>
     );
 };
@@ -124,6 +234,18 @@ export default function App() {
   
   const imageRef = useRef<HTMLImageElement>(null);
   const imageNaturalSizeRef = useRef({ width: 0, height: 0 });
+
+  const handleTextChange = (index: number, newText: string) => {
+    setTextDetections(prev => prev.map((detection, i) => 
+      i === index ? { ...detection, label: newText } : detection
+    ));
+  };
+
+  const handleBoxChange = (index: number, newBox: [number, number, number, number]) => {
+    setTextDetections(prev => prev.map((detection, i) => 
+      i === index ? { ...detection, box_2d: newBox } : detection
+    ));
+  };
 
   useEffect(() => {
     const imageEl = imageRef.current;
@@ -659,6 +781,9 @@ Use the context from the full image to better understand the text styling and ma
                             boxData={boxData} 
                             renderedSize={imageRenderedSize}
                             imageNaturalSize={imageNaturalSizeRef.current}
+                            onTextChange={handleTextChange}
+                            onBoxChange={handleBoxChange}
+                            textIndex={index}
                         >
                            {boxData.label}
                         </OverlayComponent>
