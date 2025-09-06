@@ -2,14 +2,10 @@ import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { GoogleGenAI, Type } from "@google/genai";
 
 // --- TYPE DEFINITIONS ---
-type BoundingBoxData = {
-  text: string;
-  boundingBox: {
-    x: number;
-    y: number;
-    width: number;
-    height: number;
-  };
+type TextDetectionData = {
+  label: string;
+  box_2d: [number, number, number, number]; // [yMin, xMin, yMax, xMax]
+  color: string;
 };
 
 type AppStep = 'upload' | 'processing' | 'result';
@@ -60,9 +56,18 @@ export default function App() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [step, setStep] = useState<AppStep>('upload');
-  const [boundingBoxes, setBoundingBoxes] = useState<BoundingBoxData[]>([]);
+  const [textDetections, setTextDetections] = useState<TextDetectionData[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [aspectRatio, setAspectRatio] = useState<string | null>(null);
   const imageRef = useRef<HTMLImageElement>(null);
+
+  const handleImageLoad = (event: React.SyntheticEvent<HTMLImageElement>) => {
+    const img = event.currentTarget;
+    const { naturalWidth, naturalHeight } = img;
+    if (naturalWidth > 0 && naturalHeight > 0) {
+      setAspectRatio(`${naturalWidth} / ${naturalHeight}`);
+    }
+  };
 
   const handleFileChange = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -83,8 +88,9 @@ export default function App() {
     setSelectedFile(null);
     setPreviewUrl(null);
     setStep('upload');
-    setBoundingBoxes([]);
+    setTextDetections([]);
     setError(null);
+    setAspectRatio(null);
     const fileInput = document.getElementById('file-upload') as HTMLInputElement;
     if(fileInput) {
         fileInput.value = '';
@@ -100,47 +106,39 @@ export default function App() {
 
       setStep('processing');
       setError(null);
-      setBoundingBoxes([]);
+      setTextDetections([]);
 
       try {
           const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
           const imagePart = await fileToGenerativePart(selectedFile);
+
+          const textPrompt = `Detect and extract all text from the image. For each piece of text, provide its content, its dominant color in hex format, and its bounding box pixel coordinates [y_min, x_min, y_max, x_max].`;
 
           const response = await ai.models.generateContent({
               model: 'gemini-2.5-flash',
               contents: {
                   parts: [
                       { inlineData: imagePart },
-                      { text: "Detect all text in this image. For each piece of text, provide the detected text and its bounding box coordinates (x, y, width, height) as normalized values between 0 and 1, where (0,0) is the top-left corner. The response should be a JSON object with a single key 'detections' which is an array of objects, each containing 'text' and 'boundingBox'." }
+                      { text: textPrompt }
                   ]
               },
               config: {
+                  temperature: 0.5,
                   responseMimeType: "application/json",
                   responseSchema: {
-                      type: Type.OBJECT,
-                      properties: {
-                          detections: {
-                              type: Type.ARRAY,
-                              items: {
-                                  type: Type.OBJECT,
-                                  properties: {
-                                      text: { type: Type.STRING },
-                                      boundingBox: {
-                                          type: Type.OBJECT,
-                                          properties: {
-                                              x: { type: Type.NUMBER },
-                                              y: { type: Type.NUMBER },
-                                              width: { type: Type.NUMBER },
-                                              height: { type: Type.NUMBER },
-                                          },
-                                          required: ["x", "y", "width", "height"],
-                                      }
-                                  },
-                                  required: ["text", "boundingBox"]
-                              }
-                          }
-                      },
-                      required: ["detections"]
+                      type: Type.ARRAY,
+                      items: {
+                          type: Type.OBJECT,
+                          properties: {
+                              label: { type: Type.STRING },
+                              color: { type: Type.STRING },
+                              box_2d: {
+                                  type: Type.ARRAY,
+                                  items: { type: Type.NUMBER },
+                              },
+                          },
+                          required: ["label", "color", "box_2d"]
+                      }
                   }
               }
           });
@@ -148,8 +146,10 @@ export default function App() {
           const jsonString = response.text.trim();
           const result = JSON.parse(jsonString);
 
-          if (result.detections && result.detections.length > 0) {
-              setBoundingBoxes(result.detections);
+          console.log('Detected layers:', result);
+
+          if (Array.isArray(result) && result.length > 0) {
+              setTextDetections(result);
           } else {
                setError("No text could be detected in the image. Please try another one.");
           }
@@ -220,20 +220,53 @@ export default function App() {
             </label>
           ) : (
             <div className="flex flex-col items-center gap-6">
-                <div className="relative w-full max-w-md">
-                    <img ref={imageRef} src={previewUrl!} alt="Image preview" className="rounded-lg shadow-2xl w-full object-contain max-h-[60vh]" />
-                    {step === 'result' && imageRef.current && boundingBoxes.map((boxData, index) => {
-                      const { boundingBox } = boxData;
-                      const { clientWidth: imgWidth, clientHeight: imgHeight } = imageRef.current;
+                <div 
+                    className="relative w-full max-w-md"
+                    style={{ aspectRatio: aspectRatio ?? 'auto' }}
+                >
+                    <img 
+                      ref={imageRef} 
+                      src={previewUrl!} 
+                      alt="Image preview" 
+                      className="rounded-lg shadow-2xl w-full h-full"
+                      onLoad={handleImageLoad}
+                    />
+                    {step === 'result' && textDetections.map((boxData, index) => {
+                      const { box_2d, color, label } = boxData;
+                      
+                      if (!box_2d || box_2d.length < 4 || !imageRef.current) return null;
+                      
+                      const { naturalWidth, naturalHeight } = imageRef.current;
+                      if(naturalWidth === 0 || naturalHeight === 0) return null;
+
+                      const [yMin, xMin, yMax, xMax] = box_2d;
+
+                      const top = (yMin / naturalHeight) * 100;
+                      const left = (xMin / naturalWidth) * 100;
+                      const height = ((yMax - yMin) / naturalHeight) * 100;
+                      const width = ((xMax - xMin) / naturalWidth) * 100;
+
+                      console.log(`Layer ${index}:`, {
+                        label,
+                        position: { top: `${top}%`, left: `${left}%`, height: `${height}%`, width: `${width}%` },
+                        raw_box: box_2d,
+                      });
+
+                      // Add a fallback color and opacity
+                      const borderColor = color || '#34D399'; // A nice green as fallback
+                      const bgColor = borderColor + '33'; // ~20% opacity
+
                       return (
                         <div 
                           key={index} 
-                          className="absolute border-2 border-green-400 bg-green-400/20 rounded-sm pointer-events-none"
+                          className="absolute border-2 rounded-sm pointer-events-none"
                           style={{
-                            left: `${boundingBox.x * imgWidth}px`,
-                            top: `${boundingBox.y * imgHeight}px`,
-                            width: `${boundingBox.width * imgWidth}px`,
-                            height: `${boundingBox.height * imgHeight}px`,
+                            top: `${top}%`,
+                            left: `${left}%`,
+                            height: `${height}%`,
+                            width: `${width}%`,
+                            borderColor: borderColor,
+                            backgroundColor: bgColor,
                           }}
                         />
                       );
