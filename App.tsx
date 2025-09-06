@@ -5,7 +5,7 @@ import { GoogleGenAI, Type, Modality } from "@google/genai";
 // --- TYPE DEFINITIONS ---
 type TextDetectionData = {
   label: string;
-  box_2d: [number, number, number, number]; // [yMin, xMin, yMax, xMax]
+  box_2d: [number, number, number, number]; // [yMin, xMin, yMax, xMax] (Normalized 0-1)
   color: string;
 };
 
@@ -50,63 +50,42 @@ const Spinner = () => (
     </svg>
 );
 
-const BoundingBox = ({ boxData, scales }: { boxData: TextDetectionData, scales: { x: number, y: number } }) => {
+const OverlayComponent = ({ boxData, renderedSize, children, isBoundingBox }: { boxData: TextDetectionData, renderedSize: { width: number, height: number }, children?: React.ReactNode, isBoundingBox?: boolean }) => {
     const { box_2d, color } = boxData;
 
-    if (!box_2d || box_2d.length < 4 || scales.x === 0 || scales.y === 0) {
+    if (!box_2d || box_2d.length < 4 || renderedSize.width === 0 || renderedSize.height === 0) {
         return null;
     }
     
     const [yMin, xMin, yMax, xMax] = box_2d;
 
-    const top = yMin * scales.y;
-    const left = xMin * scales.x;
-    const height = (yMax - yMin) * scales.y;
-    const width = (xMax - xMin) * scales.x;
+    const top = yMin * renderedSize.height;
+    const left = xMin * renderedSize.width;
+    const height = (yMax - yMin) * renderedSize.height;
+    const width = (xMax - xMin) * renderedSize.width;
     
-    const borderColor = color || '#34D399';
-    const bgColor = borderColor + '33';
+    let style: React.CSSProperties = {
+        top: `${top}px`,
+        left: `${left}px`,
+        height: `${height}px`,
+        width: `${width}px`,
+    };
 
-    return (
-      <div 
-        className="absolute border-2 rounded-sm pointer-events-none"
-        style={{
-          top: `${top}px`,
-          left: `${left}px`,
-          height: `${height}px`,
-          width: `${width}px`,
-          borderColor: borderColor,
-          backgroundColor: bgColor,
-        }}
-      />
-    );
-};
+    let className = "absolute pointer-events-none rounded-sm";
 
-const TextBox = ({ boxData, scales }: { boxData: TextDetectionData, scales: { x: number, y: number } }) => {
-    const { label, box_2d, color } = boxData;
-
-    if (!box_2d || box_2d.length < 4 || scales.x === 0 || scales.y === 0) {
-        return null;
+    if (isBoundingBox) {
+        const borderColor = color || '#34D399';
+        style.borderColor = borderColor;
+        style.backgroundColor = borderColor + '33';
+        className += " border-2";
+    } else {
+        // Text box styling
+        className += " flex items-center justify-center p-1 text-center leading-tight break-words";
     }
-    
-    const [yMin, xMin, yMax, xMax] = box_2d;
 
-    const top = yMin * scales.y;
-    const left = xMin * scales.x;
-    const height = (yMax - yMin) * scales.y;
-    const width = (xMax - xMin) * scales.x;
-    
     return (
-      <div 
-        className="absolute flex items-center justify-center p-1 bg-black bg-opacity-60 rounded-sm pointer-events-none text-center leading-tight break-words"
-        style={{
-          top: `${top}px`,
-          left: `${left}px`,
-          height: `${height}px`,
-          width: `${width}px`,
-        }}
-      >
-        <span style={{ color: color || '#FFFFFF' }}>{label}</span>
+      <div className={className} style={style}>
+        {children}
       </div>
     );
 };
@@ -120,39 +99,37 @@ export default function App() {
   const [step, setStep] = useState<AppStep>('upload');
   const [textDetections, setTextDetections] = useState<TextDetectionData[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [imageScales, setImageScales] = useState({ x: 0, y: 0 });
+  const [imageRenderedSize, setImageRenderedSize] = useState({ width: 0, height: 0 });
   const [isDecomposing, setIsDecomposing] = useState(false);
   const imageRef = useRef<HTMLImageElement>(null);
 
   useEffect(() => {
     const imageEl = imageRef.current;
 
-    const calculateScales = () => {
-        if (imageEl && imageEl.naturalWidth > 0 && imageEl.clientWidth > 0) {
-            const scaleX = imageEl.clientWidth / imageEl.naturalWidth;
-            const scaleY = imageEl.clientHeight / imageEl.naturalHeight;
-            setImageScales({ x: scaleX, y: scaleY });
+    const updateRenderedSize = () => {
+        if (imageEl && imageEl.clientWidth > 0) {
+            setImageRenderedSize({ width: imageEl.clientWidth, height: imageEl.clientHeight });
         } else {
-            setImageScales({ x: 0, y: 0 });
+            setImageRenderedSize({ width: 0, height: 0 });
         }
     };
 
     if (imageEl) {
-        // Image might be cached and already loaded, so calculate scale immediately
+        // Image might be cached and already loaded, so calculate immediately
         if (imageEl.complete) {
-            calculateScales();
+            updateRenderedSize();
         }
         // Add event listeners
-        imageEl.addEventListener('load', calculateScales);
-        window.addEventListener('resize', calculateScales);
+        imageEl.addEventListener('load', updateRenderedSize);
+        window.addEventListener('resize', updateRenderedSize);
     }
 
     // Cleanup function to remove event listeners
     return () => {
         if (imageEl) {
-            imageEl.removeEventListener('load', calculateScales);
+            imageEl.removeEventListener('load', updateRenderedSize);
         }
-        window.removeEventListener('resize', calculateScales);
+        window.removeEventListener('resize', updateRenderedSize);
     };
   }, [previewUrl]); // Rerun this effect when the image source changes
 
@@ -165,7 +142,7 @@ export default function App() {
     setStep('upload');
     setTextDetections([]);
     setError(null);
-    setImageScales({ x: 0, y: 0 });
+    setImageRenderedSize({ width: 0, height: 0 });
     setIsDecomposing(false);
     const fileInput = document.getElementById('file-upload') as HTMLInputElement;
     if(fileInput) {
@@ -239,25 +216,13 @@ export default function App() {
           const result = JSON.parse(jsonString);
           
           if (Array.isArray(result) && result.length > 0) {
-              const scaledResult = result.map(item => ({
+              const normalizedResult = result.map(item => ({
                   ...item,
-                  box_2d: item.box_2d.map((val: number) => val / 1000) // Assuming API returns 0-1000 range
+                  // Normalize coordinates from 0-1000 range to 0-1 range
+                  box_2d: item.box_2d.map((val: number) => val / 1000) 
               }));
-              const naturalImg = new Image();
-              naturalImg.onload = () => {
-                  const finalResult = scaledResult.map(item => ({
-                      ...item,
-                      box_2d: [
-                          item.box_2d[0] * naturalImg.naturalHeight, // yMin
-                          item.box_2d[1] * naturalImg.naturalWidth,  // xMin
-                          item.box_2d[2] * naturalImg.naturalHeight, // yMax
-                          item.box_2d[3] * naturalImg.naturalWidth,   // xMax
-                      ]
-                  }));
-                  setTextDetections(finalResult);
-                  setStep('result');
-              };
-              naturalImg.src = previewUrl!;
+              setTextDetections(normalizedResult);
+              setStep('result');
           } else {
                setError("No text could be detected in the image. Please try another one.");
                setStep('result');
@@ -307,6 +272,8 @@ export default function App() {
           if (previewUrl && previewUrl.startsWith('blob:')) {
             URL.revokeObjectURL(previewUrl);
           }
+          // Reset size before setting new URL to prevent rendering with old dimensions
+          setImageRenderedSize({ width: 0, height: 0 });
           setPreviewUrl(`data:${mimeType};base64,${base64ImageBytes}`);
           foundImage = true;
           break;
@@ -414,11 +381,13 @@ export default function App() {
                       alt="Image preview" 
                       className="rounded-lg shadow-2xl w-full h-auto block"
                     />
-                    {imageScales.x > 0 && imageScales.y > 0 && step === 'result' && textDetections.map((boxData, index) => (
-                       <BoundingBox key={index} boxData={boxData} scales={imageScales} />
+                    {imageRenderedSize.width > 0 && step === 'result' && textDetections.map((boxData, index) => (
+                       <OverlayComponent key={index} boxData={boxData} renderedSize={imageRenderedSize} isBoundingBox />
                     ))}
-                     {imageScales.x > 0 && imageScales.y > 0 && step === 'recomposed' && textDetections.map((boxData, index) => (
-                        <TextBox key={index} boxData={boxData} scales={imageScales} />
+                     {imageRenderedSize.width > 0 && step === 'recomposed' && textDetections.map((boxData, index) => (
+                        <OverlayComponent key={index} boxData={boxData} renderedSize={imageRenderedSize}>
+                            <span style={{ color: boxData.color || '#FFFFFF' }}>{boxData.label}</span>
+                        </OverlayComponent>
                     ))}
                     <button 
                         onClick={handleReset} 
