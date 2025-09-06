@@ -1,6 +1,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { aiService, TextDetectionData } from './src/services/aiService';
+import { exportService } from './src/services/exportService';
 import { OverlayComponent } from './src/components/OverlayComponent';
 
 type AppStep = 'upload' | 'processing' | 'result' | 'recomposed';
@@ -53,6 +54,21 @@ export default function App() {
     setTextDetections(prev => prev.map((detection, i) => 
       i === index ? { ...detection, box_2d: newBox } : detection
     ));
+  };
+
+  const handleDownload = async () => {
+    if (!imageRef.current) return;
+
+    try {
+      await exportService.downloadComposite(
+        imageRef.current,
+        textDetections,
+        imageRenderedSize
+      );
+    } catch (error) {
+      console.error('Export failed:', error);
+      setError('Failed to export image. Please try again.');
+    }
   };
 
   useEffect(() => {
@@ -247,12 +263,20 @@ export default function App() {
         );
       case 'recomposed':
         return (
-            <button
-                onClick={handleReset}
-                className="w-full max-w-md bg-blue-600 text-white font-bold py-3 px-6 rounded-lg text-lg shadow-lg hover:bg-blue-700 focus:outline-none focus:ring-4 focus:ring-blue-500 focus:ring-opacity-50 transition-all duration-300 ease-in-out transform hover:-translate-y-1"
-            >
-                Start Over
-            </button>
+            <div className="w-full max-w-md flex flex-col sm:flex-row gap-4">
+                <button
+                    onClick={handleDownload}
+                    className="flex-1 bg-green-600 text-white font-bold py-3 px-6 rounded-lg text-lg shadow-lg hover:bg-green-700 focus:outline-none focus:ring-4 focus:ring-green-500 focus:ring-opacity-50 transition-all duration-300 ease-in-out transform hover:-translate-y-1"
+                >
+                    Download
+                </button>
+                <button
+                    onClick={handleReset}
+                    className="flex-1 bg-blue-600 text-white font-bold py-3 px-6 rounded-lg text-lg shadow-lg hover:bg-blue-700 focus:outline-none focus:ring-4 focus:ring-blue-500 focus:ring-opacity-50 transition-all duration-300 ease-in-out transform hover:-translate-y-1"
+                >
+                    Start Over
+                </button>
+            </div>
         );
       case 'result':
         return (

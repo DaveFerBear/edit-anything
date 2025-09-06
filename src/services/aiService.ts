@@ -291,7 +291,18 @@ Use the context from the full image to better understand the text styling and ma
 
     // First pass: Remove specific text elements
     const textToRemove = detections.map(d => `"${d.label}"`).join(', ');
-    const editPrompt = `Please remove the following text elements from the image: ${textToRemove}. Return only the edited image.`;
+    const editPrompt = `IMPORTANT: Remove ONLY the following specific text elements from the image: ${textToRemove}. 
+
+CRITICAL PRESERVATION RULES:
+- DO NOT remove any images, photos, illustrations, or visual elements
+- DO NOT remove logos, icons, graphics, or decorative elements  
+- DO NOT remove borders, frames, backgrounds, or visual design elements
+- DO NOT remove colors, patterns, textures, or visual styling
+- ONLY remove the exact text content specified above
+- Preserve all non-text visual elements completely unchanged
+- Fill any removed text areas naturally to match surrounding background/context
+
+Return only the edited image with text removed but all other visual elements preserved.`;
 
     const response = await this.ai.models.generateContent({
       model: 'gemini-2.5-flash-image-preview',
@@ -322,7 +333,22 @@ Use the context from the full image to better understand the text styling and ma
     }
 
     // Second pass: Check for any remaining text and remove it
-    const secondPassPrompt = `Examine this image carefully. If there is any visible text remaining in the image, remove it completely and return the cleaned image. If there is no visible text at all, return the image unchanged. The goal is to ensure the image is completely text-free.`;
+    const secondPassPrompt = `Examine this image carefully for any remaining visible text. If you find ANY text still visible, remove it completely while following these STRICT PRESERVATION RULES:
+
+CRITICAL PRESERVATION RULES:
+- DO NOT remove any images, photos, illustrations, or visual elements
+- DO NOT remove logos, icons, graphics, or decorative elements
+- DO NOT remove borders, frames, backgrounds, or visual design elements  
+- DO NOT remove colors, patterns, textures, or visual styling
+- DO NOT alter any non-text visual elements
+- ONLY remove visible text/letters/words/numbers
+- Preserve the exact visual composition and design
+- Fill removed text areas to match surrounding context naturally
+
+If there is no visible text remaining, return the image completely unchanged. 
+If there is text remaining, remove ONLY the text while preserving all other visual elements.
+
+The goal is a completely text-free image with all original visual elements intact.`;
 
     const secondPassResponse = await this.ai.models.generateContent({
       model: 'gemini-2.5-flash-image-preview',
