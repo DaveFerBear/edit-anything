@@ -186,7 +186,10 @@ export default function App() {
           const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
           const imagePart = await fileToGenerativePart(selectedFile);
 
-          const textPrompt = `Detect all text in the image. For each text instance, provide its content, dominant hex color, and bounding box. The bounding box must be absolute pixel coordinates from the top-left corner of the original image, in the format [y_min, x_min, y_max, x_max].`;
+          const textPrompt = `
+          Output a json list where each entry contains the 2D bounding box in "box_2d", the text content in "label", and the text color in "color". 
+          Here's what the response should look like: { "box_2d": [68, 75, 322, 408], "label": "Start working out now", "color": "#0055b3" }
+          `;
 
           const response = await ai.models.generateContent({
               model: 'gemini-2.5-flash',
@@ -198,6 +201,7 @@ export default function App() {
               },
               config: {
                   temperature: 0.5,
+                  thinkingConfig: { thinkingBudget: 0 },
                   responseMimeType: "application/json",
                   responseSchema: {
                       type: Type.ARRAY,
