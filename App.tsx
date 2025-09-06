@@ -69,6 +69,7 @@ const OverlayComponent = ({ boxData, renderedSize, children, isBoundingBox }: { 
         left: `${left}px`,
         height: `${height}px`,
         width: `${width}px`,
+        whiteSpace: 'pre-wrap', // Allows text with newlines to wrap correctly
     };
 
     let className = "absolute pointer-events-none rounded-sm";
@@ -101,6 +102,7 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [imageRenderedSize, setImageRenderedSize] = useState({ width: 0, height: 0 });
   const [isDecomposing, setIsDecomposing] = useState(false);
+  const [isConsolidating, setIsConsolidating] = useState(false);
   const imageRef = useRef<HTMLImageElement>(null);
 
   useEffect(() => {
@@ -144,6 +146,7 @@ export default function App() {
     setError(null);
     setImageRenderedSize({ width: 0, height: 0 });
     setIsDecomposing(false);
+    setIsConsolidating(false);
     const fileInput = document.getElementById('file-upload') as HTMLInputElement;
     if(fileInput) {
         fileInput.value = '';
@@ -233,6 +236,115 @@ export default function App() {
           setError("An error occurred while detecting text. Please try again.");
           setStep('upload');
       }
+  };
+
+  const handleConsolidate = async () => {
+    if (!selectedFile || textDetections.length === 0) {
+      setError("No text detections to consolidate.");
+      return;
+    }
+    
+    setIsConsolidating(true);
+    setError(null);
+
+    try {
+        const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+        const imagePart = await fileToGenerativePart(selectedFile);
+
+        const detectionsForPrompt = textDetections.map((d, index) => ({
+            index,
+            label: d.label,
+            // Convert normalized box back to 0-1000 for easier reasoning by the model
+            box_2d: d.box_2d.map(coord => Math.round(coord * 1000)),
+        }));
+
+        const consolidationPrompt = `
+I have detected the following text boxes in an image. Each has an index, a label, and bounding box coordinates ([yMin, xMin, yMax, xMax]). Some of these are single lines that belong to a larger, multi-line text block. Please group the indices of text boxes that should be merged. Text boxes that are far apart or have different styling (based on the image) should not be grouped. Return a JSON object with a single key "groups". This key should contain an array of arrays, where each inner array is a group of indices that belong together. For example, if boxes 0 and 1 are a group, and 3, 4, and 5 are another group, the response should be: { "groups": [[0, 1], [3, 4, 5]] }. Do not include single, ungrouped boxes in the response.
+
+Here are the detections:
+${JSON.stringify(detectionsForPrompt, null, 2)}
+`;
+        
+        const response = await ai.models.generateContent({
+            model: 'gemini-2.5-flash',
+            contents: {
+                parts: [
+                    { inlineData: imagePart },
+                    { text: consolidationPrompt }
+                ]
+            },
+            config: {
+                temperature: 0.2,
+                thinkingConfig: { thinkingBudget: 0 },
+                responseMimeType: "application/json",
+                responseSchema: {
+                    type: Type.OBJECT,
+                    properties: {
+                        groups: {
+                            type: Type.ARRAY,
+                            items: {
+                                type: Type.ARRAY,
+                                items: { type: Type.INTEGER }
+                            }
+                        }
+                    },
+                    required: ["groups"]
+                }
+            }
+        });
+
+        const jsonString = response.text.trim();
+        const result = JSON.parse(jsonString);
+        
+        const groups: number[][] = result.groups || [];
+
+        if (groups.length === 0) {
+            console.log("Consolidation did not result in any new groups.");
+            setIsConsolidating(false);
+            return;
+        }
+
+        const newDetections: TextDetectionData[] = [];
+        const processedIndices = new Set<number>();
+
+        // Process groups
+        for (const group of groups) {
+            const boxesToMerge = group.map(index => textDetections[index]);
+            
+            if(boxesToMerge.some(b => !b)) continue; // Skip if an index is out of bounds
+
+            const mergedLabel = boxesToMerge.map(b => b.label).join('\n');
+            const mergedColor = boxesToMerge[0].color;
+
+            const yMin = Math.min(...boxesToMerge.map(b => b.box_2d[0]));
+            const xMin = Math.min(...boxesToMerge.map(b => b.box_2d[1]));
+            const yMax = Math.max(...boxesToMerge.map(b => b.box_2d[2]));
+            const xMax = Math.max(...boxesToMerge.map(b => b.box_2d[3]));
+
+            newDetections.push({
+                label: mergedLabel,
+                color: mergedColor,
+                box_2d: [yMin, xMin, yMax, xMax]
+            });
+
+            group.forEach(index => processedIndices.add(index));
+        }
+
+        // Add single boxes that were not part of any group
+        textDetections.forEach((detection, index) => {
+            if (!processedIndices.has(index)) {
+                newDetections.push(detection);
+            }
+        });
+
+        setTextDetections(newDetections);
+
+    } catch (err) {
+        console.error(err);
+        setError("An error occurred during consolidation. Please try again.");
+    } finally {
+        setIsConsolidating(false);
+    }
   };
 
   const handleDecompose = async () => {
@@ -326,22 +438,32 @@ export default function App() {
         );
       case 'result':
         return (
-            <div className="w-full max-w-md flex flex-col sm:flex-row gap-4">
-                <button
-                    onClick={handleDecompose}
-                    disabled={isDecomposing}
-                    className="flex-1 bg-green-600 text-white font-bold py-3 px-6 rounded-lg text-lg shadow-lg hover:bg-green-700 focus:outline-none focus:ring-4 focus:ring-green-500 focus:ring-opacity-50 transition-all duration-300 ease-in-out transform hover:-translate-y-1 flex items-center justify-center disabled:bg-green-800"
+            <div className="w-full max-w-md flex flex-col gap-4">
+                 <button
+                    onClick={handleConsolidate}
+                    disabled={isConsolidating || isDecomposing || textDetections.length < 2}
+                    className="w-full bg-indigo-600 text-white font-bold py-3 px-6 rounded-lg text-lg shadow-lg hover:bg-indigo-700 focus:outline-none focus:ring-4 focus:ring-indigo-500 focus:ring-opacity-50 transition-all duration-300 ease-in-out transform hover:-translate-y-1 flex items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none"
                 >
-                    {isDecomposing && <Spinner />}
-                    {isDecomposing ? 'Decomposing...' : 'Decompose'}
+                    {isConsolidating && <Spinner />}
+                    {isConsolidating ? 'Consolidating...' : 'Consolidate Text'}
                 </button>
-                <button
-                    onClick={handleSubmit}
-                    disabled={isDecomposing}
-                    className="flex-1 bg-gray-600 text-white font-bold py-3 px-6 rounded-lg text-lg shadow-lg hover:bg-gray-700 focus:outline-none focus:ring-4 focus:ring-gray-500 focus:ring-opacity-50 transition-all duration-300 ease-in-out transform hover:-translate-y-1 disabled:bg-gray-800"
-                >
-                    Re-run Detection
-                </button>
+                <div className="flex flex-col sm:flex-row gap-4">
+                    <button
+                        onClick={handleDecompose}
+                        disabled={isDecomposing || isConsolidating}
+                        className="flex-1 bg-green-600 text-white font-bold py-3 px-6 rounded-lg text-lg shadow-lg hover:bg-green-700 focus:outline-none focus:ring-4 focus:ring-green-500 focus:ring-opacity-50 transition-all duration-300 ease-in-out transform hover:-translate-y-1 flex items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none"
+                    >
+                        {isDecomposing && <Spinner />}
+                        {isDecomposing ? 'Decomposing...' : 'Decompose'}
+                    </button>
+                    <button
+                        onClick={handleSubmit}
+                        disabled={isDecomposing || isConsolidating}
+                        className="flex-1 bg-gray-600 text-white font-bold py-3 px-6 rounded-lg text-lg shadow-lg hover:bg-gray-700 focus:outline-none focus:ring-4 focus:ring-gray-500 focus:ring-opacity-50 transition-all duration-300 ease-in-out transform hover:-translate-y-1 disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none"
+                    >
+                        Re-run Detection
+                    </button>
+                </div>
             </div>
         );
       case 'upload':
