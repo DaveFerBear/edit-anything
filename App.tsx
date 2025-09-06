@@ -86,7 +86,7 @@ const OverlayComponent = ({ boxData, renderedSize, children, isBoundingBox, imag
     } else {
         // Text box styling for 'recomposed' step
         const scaleFactor = imageNaturalSize && imageNaturalSize.width > 0 ? renderedSize.width / imageNaturalSize.width : 1;
-        style.fontSize = boxData.fontSize ? `${(boxData.fontSize / 2) * scaleFactor}px` : '1em';
+        style.fontSize = boxData.fontSize ? `${boxData.fontSize * scaleFactor}px` : '1em';
         style.fontFamily = boxData.fontFamily || 'sans-serif';
         style.textAlign = boxData.textAlign as React.CSSProperties['textAlign'] || 'center';
         style.color = boxData.color;
@@ -493,26 +493,63 @@ Use the context from the full image to better understand the text styling and ma
         });
 
         let foundImage = false;
+        let firstPassImage = '';
+        let firstPassMimeType = '';
+        
         for (const part of response.candidates[0].content.parts) {
             if (part.inlineData) {
                 const base64ImageBytes = part.inlineData.data;
                 const mimeType = part.inlineData.mimeType;
-                if (previewUrl && previewUrl.startsWith('blob:')) {
-                    URL.revokeObjectURL(previewUrl);
-                }
-                setImageRenderedSize({ width: 0, height: 0 });
-                setPreviewUrl(`data:${mimeType};base64,${base64ImageBytes}`);
+                firstPassImage = base64ImageBytes;
+                firstPassMimeType = mimeType;
                 foundImage = true;
                 break;
             }
         }
 
-        if (foundImage) {
-            setStep('recomposed');
-        } else {
+        if (!foundImage) {
             setError("Decomposition failed. Could not generate the edited image.");
             setStep('result');
+            return;
         }
+
+        // Second pass: Check if any text remains and remove it
+        setDecompositionStatus("Checking for remaining text...");
+        
+        const secondPassPrompt = `Examine this image carefully. If there is any visible text remaining in the image, remove it completely and return the cleaned image. If there is no visible text at all, return the image unchanged. The goal is to ensure the image is completely text-free.`;
+        
+        const secondPassResponse = await ai.models.generateContent({
+            model: 'gemini-2.5-flash-image-preview',
+            contents: {
+                parts: [
+                    { inlineData: { mimeType: firstPassMimeType, data: firstPassImage } },
+                    { text: secondPassPrompt },
+                ],
+            },
+            config: {
+                responseModalities: [Modality.IMAGE, Modality.TEXT],
+            },
+        });
+
+        let finalImage = firstPassImage;
+        let finalMimeType = firstPassMimeType;
+        
+        // Check if second pass returned a new image
+        for (const part of secondPassResponse.candidates[0].content.parts) {
+            if (part.inlineData) {
+                finalImage = part.inlineData.data;
+                finalMimeType = part.inlineData.mimeType;
+                console.log('Second pass text removal applied');
+                break;
+            }
+        }
+
+        if (previewUrl && previewUrl.startsWith('blob:')) {
+            URL.revokeObjectURL(previewUrl);
+        }
+        setImageRenderedSize({ width: 0, height: 0 });
+        setPreviewUrl(`data:${finalMimeType};base64,${finalImage}`);
+        setStep('recomposed');
     } catch (err) {
         console.error(err);
         setError("An error occurred during decomposition. Please try again.");
