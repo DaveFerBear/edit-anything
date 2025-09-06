@@ -50,29 +50,19 @@ const Spinner = () => (
     </svg>
 );
 
-const BoundingBox = ({ boxData, imageRef }: { boxData: TextDetectionData, imageRef: React.RefObject<HTMLImageElement> }) => {
+const BoundingBox = ({ boxData, scales }: { boxData: TextDetectionData, scales: { x: number, y: number } }) => {
     const { box_2d, color } = boxData;
-    const imageEl = imageRef.current;
 
-    if (!box_2d || box_2d.length < 4 || !imageEl) {
+    if (!box_2d || box_2d.length < 4 || scales.x === 0 || scales.y === 0) {
         return null;
     }
     
-    const { naturalWidth, clientWidth } = imageEl;
-    if (naturalWidth === 0 || clientWidth === 0) {
-        return null;
-    }
-
-    // Since the image's aspect ratio is preserved (w-full, h-auto),
-    // we can use a single scale factor based on the width.
-    const scale = clientWidth / naturalWidth;
-
     const [yMin, xMin, yMax, xMax] = box_2d;
 
-    const top = yMin * scale;
-    const left = xMin * scale;
-    const height = (yMax - yMin) * scale;
-    const width = (xMax - xMin) * scale;
+    const top = yMin * scales.y;
+    const left = xMin * scales.x;
+    const height = (yMax - yMin) * scales.y;
+    const width = (xMax - xMin) * scales.x;
     
     const borderColor = color || '#34D399';
     const bgColor = borderColor + '33';
@@ -92,29 +82,19 @@ const BoundingBox = ({ boxData, imageRef }: { boxData: TextDetectionData, imageR
     );
 };
 
-const TextBox = ({ boxData, imageRef }: { boxData: TextDetectionData, imageRef: React.RefObject<HTMLImageElement> }) => {
+const TextBox = ({ boxData, scales }: { boxData: TextDetectionData, scales: { x: number, y: number } }) => {
     const { label, box_2d, color } = boxData;
-    const imageEl = imageRef.current;
 
-    if (!box_2d || box_2d.length < 4 || !imageEl) {
+    if (!box_2d || box_2d.length < 4 || scales.x === 0 || scales.y === 0) {
         return null;
     }
-    
-    const { naturalWidth, clientWidth } = imageEl;
-    if (naturalWidth === 0 || clientWidth === 0) {
-        return null;
-    }
-
-    // Since the image's aspect ratio is preserved (w-full, h-auto),
-    // we can use a single scale factor based on the width.
-    const scale = clientWidth / naturalWidth;
     
     const [yMin, xMin, yMax, xMax] = box_2d;
 
-    const top = yMin * scale;
-    const left = xMin * scale;
-    const height = (yMax - yMin) * scale;
-    const width = (xMax - xMin) * scale;
+    const top = yMin * scales.y;
+    const left = xMin * scales.x;
+    const height = (yMax - yMin) * scales.y;
+    const width = (xMax - xMin) * scales.x;
     
     return (
       <div 
@@ -140,13 +120,41 @@ export default function App() {
   const [step, setStep] = useState<AppStep>('upload');
   const [textDetections, setTextDetections] = useState<TextDetectionData[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [imageLoaded, setImageLoaded] = useState(false);
+  const [imageScales, setImageScales] = useState({ x: 0, y: 0 });
   const [isDecomposing, setIsDecomposing] = useState(false);
   const imageRef = useRef<HTMLImageElement>(null);
 
-  const handleImageLoad = () => {
-    setImageLoaded(true);
-  };
+  useEffect(() => {
+    const imageEl = imageRef.current;
+
+    const calculateScales = () => {
+        if (imageEl && imageEl.naturalWidth > 0 && imageEl.clientWidth > 0) {
+            const scaleX = imageEl.clientWidth / imageEl.naturalWidth;
+            const scaleY = imageEl.clientHeight / imageEl.naturalHeight;
+            setImageScales({ x: scaleX, y: scaleY });
+        } else {
+            setImageScales({ x: 0, y: 0 });
+        }
+    };
+
+    if (imageEl) {
+        // Image might be cached and already loaded, so calculate scale immediately
+        if (imageEl.complete) {
+            calculateScales();
+        }
+        // Add event listeners
+        imageEl.addEventListener('load', calculateScales);
+        window.addEventListener('resize', calculateScales);
+    }
+
+    // Cleanup function to remove event listeners
+    return () => {
+        if (imageEl) {
+            imageEl.removeEventListener('load', calculateScales);
+        }
+        window.removeEventListener('resize', calculateScales);
+    };
+  }, [previewUrl]); // Rerun this effect when the image source changes
 
   const handleReset = () => {
     if (previewUrl && previewUrl.startsWith('blob:')) {
@@ -157,7 +165,7 @@ export default function App() {
     setStep('upload');
     setTextDetections([]);
     setError(null);
-    setImageLoaded(false);
+    setImageScales({ x: 0, y: 0 });
     setIsDecomposing(false);
     const fileInput = document.getElementById('file-upload') as HTMLInputElement;
     if(fileInput) {
@@ -193,7 +201,7 @@ export default function App() {
           const imagePart = await fileToGenerativePart(selectedFile);
 
           const textPrompt = `
-          Output a json list where each entry contains the 2D bounding box in "box_2d", the text content in "label", and the text color in "color". 
+          Output a json list where each entry contains the 2D bounding box in "box_2d", the text content in "label", and the text color in "color". The bounding box coordinates should be normalized to the image dimensions (0-1000).
           Here's what the response should look like: { "box_2d": [68, 75, 322, 408], "label": "Start working out now", "color": "#0055b3" }
           `;
 
@@ -229,13 +237,31 @@ export default function App() {
           
           const jsonString = response.text.trim();
           const result = JSON.parse(jsonString);
-
+          
           if (Array.isArray(result) && result.length > 0) {
-              setTextDetections(result);
+              const scaledResult = result.map(item => ({
+                  ...item,
+                  box_2d: item.box_2d.map((val: number) => val / 1000) // Assuming API returns 0-1000 range
+              }));
+              const naturalImg = new Image();
+              naturalImg.onload = () => {
+                  const finalResult = scaledResult.map(item => ({
+                      ...item,
+                      box_2d: [
+                          item.box_2d[0] * naturalImg.naturalHeight, // yMin
+                          item.box_2d[1] * naturalImg.naturalWidth,  // xMin
+                          item.box_2d[2] * naturalImg.naturalHeight, // yMax
+                          item.box_2d[3] * naturalImg.naturalWidth,   // xMax
+                      ]
+                  }));
+                  setTextDetections(finalResult);
+                  setStep('result');
+              };
+              naturalImg.src = previewUrl!;
           } else {
                setError("No text could be detected in the image. Please try another one.");
+               setStep('result');
           }
-          setStep('result');
 
       } catch (err) {
           console.error(err);
@@ -387,13 +413,12 @@ export default function App() {
                       src={previewUrl!} 
                       alt="Image preview" 
                       className="rounded-lg shadow-2xl w-full h-auto block"
-                      onLoad={handleImageLoad}
                     />
-                    {imageLoaded && step === 'result' && textDetections.map((boxData, index) => (
-                       <BoundingBox key={index} boxData={boxData} imageRef={imageRef} />
+                    {imageScales.x > 0 && imageScales.y > 0 && step === 'result' && textDetections.map((boxData, index) => (
+                       <BoundingBox key={index} boxData={boxData} scales={imageScales} />
                     ))}
-                     {imageLoaded && step === 'recomposed' && textDetections.map((boxData, index) => (
-                        <TextBox key={index} boxData={boxData} imageRef={imageRef} />
+                     {imageScales.x > 0 && imageScales.y > 0 && step === 'recomposed' && textDetections.map((boxData, index) => (
+                        <TextBox key={index} boxData={boxData} scales={imageScales} />
                     ))}
                     <button 
                         onClick={handleReset} 
