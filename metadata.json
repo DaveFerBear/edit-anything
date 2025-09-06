@@ -1,0 +1,5 @@
+{
+  "name": "Image Decomposer",
+  "description": "Upload an image to prepare it for decomposition. When an image is uploaded, a submit button will appear.",
+  "requestFramePermissions": []
+}
