@@ -1,5 +1,5 @@
-import React, { useState, useCallback, useEffect, useRef } from 'react';
-import { GoogleGenAI, Type } from "@google/genai";
+import React, { useState, useEffect, useRef } from 'react';
+import { GoogleGenAI, Type, Modality } from "@google/genai";
 
 // --- TYPE DEFINITIONS ---
 type TextDetectionData = {
@@ -8,7 +8,7 @@ type TextDetectionData = {
   color: string;
 };
 
-type AppStep = 'upload' | 'processing' | 'result';
+type AppStep = 'upload' | 'processing' | 'result' | 'decomposed';
 
 // --- HELPER FUNCTIONS & COMPONENTS ---
 
@@ -49,6 +49,43 @@ const Spinner = () => (
     </svg>
 );
 
+const BoundingBox = ({ boxData, imageRef }: { boxData: TextDetectionData, imageRef: React.RefObject<HTMLImageElement> }) => {
+    const { box_2d, color } = boxData;
+
+    if (!box_2d || box_2d.length < 4 || !imageRef.current) {
+        return null;
+    }
+    
+    const { naturalWidth, naturalHeight } = imageRef.current;
+    if (naturalWidth === 0 || naturalHeight === 0) {
+        return null;
+    }
+
+    const [yMin, xMin, yMax, xMax] = box_2d;
+
+    const top = (yMin / naturalHeight) * 100;
+    const left = (xMin / naturalWidth) * 100;
+    const height = ((yMax - yMin) / naturalHeight) * 100;
+    const width = ((xMax - xMin) / naturalWidth) * 100;
+    
+    const borderColor = color || '#34D399';
+    const bgColor = borderColor + '33';
+
+    return (
+      <div 
+        className="absolute border-2 rounded-sm pointer-events-none"
+        style={{
+          top: `${top}%`,
+          left: `${left}%`,
+          height: `${height}%`,
+          width: `${width}%`,
+          borderColor: borderColor,
+          backgroundColor: bgColor,
+        }}
+      />
+    );
+};
+
 
 // --- MAIN APP COMPONENT ---
 
@@ -59,6 +96,7 @@ export default function App() {
   const [textDetections, setTextDetections] = useState<TextDetectionData[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [aspectRatio, setAspectRatio] = useState<string | null>(null);
+  const [isDecomposing, setIsDecomposing] = useState(false);
   const imageRef = useRef<HTMLImageElement>(null);
 
   const handleImageLoad = (event: React.SyntheticEvent<HTMLImageElement>) => {
@@ -69,20 +107,8 @@ export default function App() {
     }
   };
 
-  const handleFileChange = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (file && file.type.startsWith('image/')) {
-      handleReset(); // Reset state before setting new file
-      setSelectedFile(file);
-      const newPreviewUrl = URL.createObjectURL(file);
-      setPreviewUrl(newPreviewUrl);
-    } else {
-        alert('Please select a valid image file.');
-    }
-  }, []);
-
-  const handleReset = useCallback(() => {
-    if (previewUrl) {
+  const handleReset = () => {
+    if (previewUrl && previewUrl.startsWith('blob:')) {
       URL.revokeObjectURL(previewUrl);
     }
     setSelectedFile(null);
@@ -91,13 +117,26 @@ export default function App() {
     setTextDetections([]);
     setError(null);
     setAspectRatio(null);
+    setIsDecomposing(false);
     const fileInput = document.getElementById('file-upload') as HTMLInputElement;
     if(fileInput) {
         fileInput.value = '';
     }
-  }, [previewUrl]);
+  };
 
-  const handleSubmit = useCallback(async (event: React.MouseEvent<HTMLButtonElement>) => {
+  const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (file && file.type.startsWith('image/')) {
+      handleReset();
+      setSelectedFile(file);
+      const newPreviewUrl = URL.createObjectURL(file);
+      setPreviewUrl(newPreviewUrl);
+    } else {
+        alert('Please select a valid image file.');
+    }
+  };
+
+  const handleSubmit = async (event: React.MouseEvent<HTMLButtonElement>) => {
       event.preventDefault();
       if (!selectedFile) {
           alert("Please select a file first.");
@@ -112,7 +151,7 @@ export default function App() {
           const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
           const imagePart = await fileToGenerativePart(selectedFile);
 
-          const textPrompt = `Detect and extract all text from the image. For each piece of text, provide its content, its dominant color in hex format, and its bounding box pixel coordinates [y_min, x_min, y_max, x_max].`;
+          const textPrompt = `Detect all text in the image. For each text instance, provide its content, dominant hex color, and bounding box. The bounding box must be absolute pixel coordinates from the top-left corner of the original image, in the format [y_min, x_min, y_max, x_max].`;
 
           const response = await ai.models.generateContent({
               model: 'gemini-2.5-flash',
@@ -146,8 +185,6 @@ export default function App() {
           const jsonString = response.text.trim();
           const result = JSON.parse(jsonString);
 
-          console.log('Detected layers:', result);
-
           if (Array.isArray(result) && result.length > 0) {
               setTextDetections(result);
           } else {
@@ -160,12 +197,69 @@ export default function App() {
           setError("An error occurred while detecting text. Please try again.");
           setStep('upload');
       }
-  }, [selectedFile]);
+  };
+
+  const handleDecompose = async () => {
+    if (!selectedFile || textDetections.length === 0) {
+      setError("No text was detected to decompose.");
+      return;
+    }
+
+    setIsDecomposing(true);
+    setError(null);
+
+    try {
+      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+      const imagePart = await fileToGenerativePart(selectedFile);
+
+      const textToRemove = textDetections.map(d => `"${d.label}"`).join(', ');
+      const editPrompt = `Please remove the following text elements from the image: ${textToRemove}. Return only the edited image.`;
+      
+      const response = await ai.models.generateContent({
+        model: 'gemini-2.5-flash-image-preview',
+        contents: {
+          parts: [
+            { inlineData: imagePart },
+            { text: editPrompt },
+          ],
+        },
+        config: {
+          responseModalities: [Modality.IMAGE, Modality.TEXT],
+        },
+      });
+
+      let foundImage = false;
+      for (const part of response.candidates[0].content.parts) {
+        if (part.inlineData) {
+          const base64ImageBytes = part.inlineData.data;
+          const mimeType = part.inlineData.mimeType;
+          if (previewUrl && previewUrl.startsWith('blob:')) {
+            URL.revokeObjectURL(previewUrl);
+          }
+          setPreviewUrl(`data:${mimeType};base64,${base64ImageBytes}`);
+          foundImage = true;
+          break;
+        }
+      }
+
+      if (foundImage) {
+        setStep('decomposed');
+      } else {
+        setError("Decomposition failed. Could not generate the edited image.");
+        setStep('result');
+      }
+    } catch (err) {
+      console.error(err);
+      setError("An error occurred during decomposition. Please try again.");
+      setStep('result');
+    } finally {
+      setIsDecomposing(false);
+    }
+  };
 
   useEffect(() => {
-    // Cleanup object URL on component unmount or when previewUrl changes
     return () => {
-      if (previewUrl) {
+      if (previewUrl && previewUrl.startsWith('blob:')) {
         URL.revokeObjectURL(previewUrl);
       }
     };
@@ -183,14 +277,34 @@ export default function App() {
             Detecting Text...
           </button>
         );
+      case 'decomposed':
+        return (
+            <button
+                onClick={handleReset}
+                className="w-full max-w-md bg-blue-600 text-white font-bold py-3 px-6 rounded-lg text-lg shadow-lg hover:bg-blue-700 focus:outline-none focus:ring-4 focus:ring-blue-500 focus:ring-opacity-50 transition-all duration-300 ease-in-out transform hover:-translate-y-1"
+            >
+                Start Over
+            </button>
+        );
       case 'result':
         return (
-            <button 
-                onClick={handleReset} 
-                className="w-full max-w-md bg-green-600 text-white font-bold py-3 px-6 rounded-lg text-lg shadow-lg hover:bg-green-700 focus:outline-none focus:ring-4 focus:ring-green-500 focus:ring-opacity-50 transition-all duration-300 ease-in-out transform hover:-translate-y-1"
-            >
-                Decompose Another Image
-            </button>
+            <div className="w-full max-w-md flex flex-col sm:flex-row gap-4">
+                <button
+                    onClick={handleDecompose}
+                    disabled={isDecomposing}
+                    className="flex-1 bg-green-600 text-white font-bold py-3 px-6 rounded-lg text-lg shadow-lg hover:bg-green-700 focus:outline-none focus:ring-4 focus:ring-green-500 focus:ring-opacity-50 transition-all duration-300 ease-in-out transform hover:-translate-y-1 flex items-center justify-center disabled:bg-green-800"
+                >
+                    {isDecomposing && <Spinner />}
+                    {isDecomposing ? 'Decomposing...' : 'Decompose'}
+                </button>
+                <button
+                    onClick={handleSubmit}
+                    disabled={isDecomposing}
+                    className="flex-1 bg-gray-600 text-white font-bold py-3 px-6 rounded-lg text-lg shadow-lg hover:bg-gray-700 focus:outline-none focus:ring-4 focus:ring-gray-500 focus:ring-opacity-50 transition-all duration-300 ease-in-out transform hover:-translate-y-1 disabled:bg-gray-800"
+                >
+                    Re-run Detection
+                </button>
+            </div>
         );
       case 'upload':
       default:
@@ -231,46 +345,9 @@ export default function App() {
                       className="rounded-lg shadow-2xl w-full h-full"
                       onLoad={handleImageLoad}
                     />
-                    {step === 'result' && textDetections.map((boxData, index) => {
-                      const { box_2d, color, label } = boxData;
-                      
-                      if (!box_2d || box_2d.length < 4 || !imageRef.current) return null;
-                      
-                      const { naturalWidth, naturalHeight } = imageRef.current;
-                      if(naturalWidth === 0 || naturalHeight === 0) return null;
-
-                      const [yMin, xMin, yMax, xMax] = box_2d;
-
-                      const top = (yMin / naturalHeight) * 100;
-                      const left = (xMin / naturalWidth) * 100;
-                      const height = ((yMax - yMin) / naturalHeight) * 100;
-                      const width = ((xMax - xMin) / naturalWidth) * 100;
-
-                      console.log(`Layer ${index}:`, {
-                        label,
-                        position: { top: `${top}%`, left: `${left}%`, height: `${height}%`, width: `${width}%` },
-                        raw_box: box_2d,
-                      });
-
-                      // Add a fallback color and opacity
-                      const borderColor = color || '#34D399'; // A nice green as fallback
-                      const bgColor = borderColor + '33'; // ~20% opacity
-
-                      return (
-                        <div 
-                          key={index} 
-                          className="absolute border-2 rounded-sm pointer-events-none"
-                          style={{
-                            top: `${top}%`,
-                            left: `${left}%`,
-                            height: `${height}%`,
-                            width: `${width}%`,
-                            borderColor: borderColor,
-                            backgroundColor: bgColor,
-                          }}
-                        />
-                      );
-                    })}
+                    {step === 'result' && textDetections.map((boxData, index) => (
+                       <BoundingBox key={index} boxData={boxData} imageRef={imageRef} />
+                    ))}
                     <button 
                         onClick={handleReset} 
                         className="absolute -top-3 -right-3 p-1.5 bg-gray-800 text-white rounded-full hover:bg-red-600 hover:scale-110 transition-all duration-200 shadow-lg"
