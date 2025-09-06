@@ -9,6 +9,7 @@ export type TextDetectionData = {
   fontSize?: number;
   fontFamily?: string;
   textAlign?: 'left' | 'center' | 'right' | 'justify';
+  rotation?: number; // Rotation angle in degrees
 };
 
 export type FontProperties = {
@@ -16,6 +17,7 @@ export type FontProperties = {
   fontFamily: string;
   color: string;
   textAlign: string;
+  rotation: number;
 };
 
 // Helper function to convert file to format expected by Google AI
@@ -255,6 +257,7 @@ ${JSON.stringify(detectionsForPrompt, null, 2)}
 - "fontFamily": The name of the font family. Choose the closest match from the following list: ${fontList}. If none are a close match, provide another common web font name. Only as a last resort, use a generic description like "serif" or "sans-serif".
 - "color": The hex code for the text color.
 - "textAlign": The alignment of the text ("left", "center", or "right").
+- "rotation": The rotation angle of the text in degrees. 0 degrees means horizontal text. Positive values indicate clockwise rotation. Measure the angle between the text baseline and a horizontal line.
 
 Use the context from the full image to better understand the text styling and make more accurate assessments.`;
 
@@ -272,8 +275,9 @@ Use the context from the full image to better understand the text styling and ma
             fontFamily: { type: Type.STRING },
             color: { type: Type.STRING },
             textAlign: { type: Type.STRING },
+            rotation: { type: Type.NUMBER },
           },
-          required: ["fontSize", "fontFamily", "color", "textAlign"]
+          required: ["fontSize", "fontFamily", "color", "textAlign", "rotation"]
         }
       }
     });

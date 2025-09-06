@@ -81,6 +81,10 @@ export class ExportService {
     ctx.fillStyle = detection.color;
     ctx.textAlign = (detection.textAlign as CanvasTextAlign) || 'center';
 
+    // Apply rotation if detected
+    const rotation = detection.rotation || 0;
+    const hasRotation = rotation !== 0;
+
     // Handle multi-line text with tighter line spacing to match CSS leading-tight
     const lines = detection.label.split('\n');
     const lineHeight = canvasFontSize * 1.1; // Tighter spacing to match CSS leading-tight
@@ -96,6 +100,17 @@ export class ExportService {
       startY = y + canvasFontSize * 0.1; // Small top padding
     }
 
+    // Save the current canvas state for rotation
+    if (hasRotation) {
+      ctx.save();
+      // Rotate around the center of the text bounding box
+      const centerX = x + width / 2;
+      const centerY = y + height / 2;
+      ctx.translate(centerX, centerY);
+      ctx.rotate((rotation * Math.PI) / 180); // Convert degrees to radians
+      ctx.translate(-centerX, -centerY);
+    }
+
     // Draw each line with consistent positioning
     lines.forEach((line, index) => {
       let textX = x;
@@ -109,6 +124,11 @@ export class ExportService {
       
       ctx.fillText(line, textX, startY + index * lineHeight);
     });
+
+    // Restore the canvas state after rotation
+    if (hasRotation) {
+      ctx.restore();
+    }
   }
 
   /**

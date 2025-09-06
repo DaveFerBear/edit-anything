@@ -203,7 +203,8 @@ export default function App() {
                         fontSize: 16,
                         fontFamily: 'sans-serif',
                         color: detection.color,
-                        textAlign: 'center'
+                        textAlign: 'center',
+                        rotation: 0
                     };
                 }
             });

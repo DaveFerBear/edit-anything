@@ -60,6 +60,12 @@ export const OverlayComponent: React.FC<OverlayComponentProps> = ({
     style.fontFamily = boxData.fontFamily || 'sans-serif';
     style.textAlign = boxData.textAlign as React.CSSProperties['textAlign'] || 'center';
     style.color = boxData.color;
+    
+    // Apply rotation if detected
+    if (boxData.rotation && boxData.rotation !== 0) {
+      style.transform = `rotate(${boxData.rotation}deg)`;
+      style.transformOrigin = 'center center';
+    }
 
     className += " flex items-center p-1 leading-tight break-words cursor-text hover:border-2 hover:border-blue-400 hover:bg-blue-50/20 transition-all duration-75 pointer-events-auto group";
     
