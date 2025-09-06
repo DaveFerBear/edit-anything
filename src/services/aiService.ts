@@ -284,7 +284,38 @@ Use the context from the full image to better understand the text styling and ma
 
     const jsonString = response.text.trim();
     const properties = JSON.parse(jsonString);
+
+    // Also send to experimental API for comparison (don't use result yet)
+    try {
+      await this.sendToExperimentalAPI(croppedImagePart.inlineData.data);
+    } catch (err) {
+      console.log('Experimental API call failed (this is okay):', err);
+    }
+
     return properties;
+  }
+
+  /**
+   * Send cropped image to experimental API for testing
+   */
+  private async sendToExperimentalAPI(base64ImageData: string): Promise<void> {
+    const response = await fetch('http://localhost:8080/detect-font-properties', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        image: base64ImageData,
+        format: 'base64'
+      })
+    });
+
+    if (response.ok) {
+      const result = await response.json();
+      console.log('Experimental API Result:', result);
+    } else {
+      throw new Error(`Experimental API responded with status: ${response.status}`);
+    }
   }
 
   /**
