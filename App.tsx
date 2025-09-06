@@ -277,11 +277,19 @@ export default function App() {
         const detectionsForPrompt = detections.map((d, index) => ({
             index,
             label: d.label,
+            color: d.color,
             box_2d: d.box_2d.map(coord => Math.round(coord * 1000)),
         }));
 
         const consolidationPrompt = `
-I have detected the following text boxes in an image. Each has an index, a label, and bounding box coordinates ([yMin, xMin, yMax, xMax]). Some of these are single lines that belong to a larger, multi-line text block. Please group the indices of text boxes that should be merged. Text boxes that are far apart or have different styling (based on the image) should not be grouped. Return a JSON object with a single key "groups". This key should contain an array of arrays, where each inner array is a group of indices that belong together. For example, if boxes 0 and 1 are a group, and 3, 4, and 5 are another group, the response should be: { "groups": [[0, 1], [3, 4, 5]] }. Do not include single, ungrouped boxes in the response.
+I have detected the following text boxes in an image. Each has an index, a label, color, and bounding box coordinates ([yMin, xMin, yMax, xMax]). Some of these are single lines that belong to a larger, multi-line text block. Please group the indices of text boxes that should be merged. 
+
+IMPORTANT RULES:
+- Only group text boxes that have the EXACT SAME COLOR
+- Text boxes that are far apart or have different styling should not be grouped
+- Different colors indicate different text elements and must remain separate
+
+Return a JSON object with a single key "groups". This key should contain an array of arrays, where each inner array is a group of indices that belong together. For example, if boxes 0 and 1 have the same color and are a group, and 3, 4, and 5 have the same color and are another group, the response should be: { "groups": [[0, 1], [3, 4, 5]] }. Do not include single, ungrouped boxes in the response.
 
 Here are the detections:
 ${JSON.stringify(detectionsForPrompt, null, 2)}
@@ -333,8 +341,15 @@ ${JSON.stringify(detectionsForPrompt, null, 2)}
             
             if(boxesToMerge.some(b => !b)) continue;
 
+            // Ensure all boxes in the group have the same color
+            const firstColor = boxesToMerge[0].color;
+            if (!boxesToMerge.every(b => b.color === firstColor)) {
+                console.log(`Skipping group ${group} - boxes have different colors`);
+                continue;
+            }
+
             const mergedLabel = boxesToMerge.map(b => b.label).join('\n');
-            const mergedColor = boxesToMerge[0].color;
+            const mergedColor = firstColor;
 
             const yMin = Math.min(...boxesToMerge.map(b => b.box_2d[0]));
             const xMin = Math.min(...boxesToMerge.map(b => b.box_2d[1]));
