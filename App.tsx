@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useRef } from 'react';
 import { GoogleGenAI, Type, Modality } from "@google/genai";
 
@@ -8,7 +9,7 @@ type TextDetectionData = {
   color: string;
 };
 
-type AppStep = 'upload' | 'processing' | 'result' | 'decomposed';
+type AppStep = 'upload' | 'processing' | 'result' | 'recomposed';
 
 // --- HELPER FUNCTIONS & COMPONENTS ---
 
@@ -83,6 +84,40 @@ const BoundingBox = ({ boxData, imageRef }: { boxData: TextDetectionData, imageR
           backgroundColor: bgColor,
         }}
       />
+    );
+};
+
+const TextBox = ({ boxData, imageRef }: { boxData: TextDetectionData, imageRef: React.RefObject<HTMLImageElement> }) => {
+    const { label, box_2d } = boxData;
+
+    if (!box_2d || box_2d.length < 4 || !imageRef.current) {
+        return null;
+    }
+    
+    const { naturalWidth, naturalHeight } = imageRef.current;
+    if (naturalWidth === 0 || naturalHeight === 0) {
+        return null;
+    }
+
+    const [yMin, xMin, yMax, xMax] = box_2d;
+
+    const top = (yMin / naturalHeight) * 100;
+    const left = (xMin / naturalWidth) * 100;
+    const height = ((yMax - yMin) / naturalHeight) * 100;
+    const width = ((xMax - xMin) / naturalWidth) * 100;
+    
+    return (
+      <div 
+        className="absolute flex items-center justify-center p-1 bg-black bg-opacity-60 rounded-sm pointer-events-none text-white text-center leading-tight break-words"
+        style={{
+          top: `${top}%`,
+          left: `${left}%`,
+          height: `${height}%`,
+          width: `${width}%`,
+        }}
+      >
+        <span>{label}</span>
+      </div>
     );
 };
 
@@ -243,7 +278,7 @@ export default function App() {
       }
 
       if (foundImage) {
-        setStep('decomposed');
+        setStep('recomposed');
       } else {
         setError("Decomposition failed. Could not generate the edited image.");
         setStep('result');
@@ -277,7 +312,7 @@ export default function App() {
             Detecting Text...
           </button>
         );
-      case 'decomposed':
+      case 'recomposed':
         return (
             <button
                 onClick={handleReset}
@@ -347,6 +382,9 @@ export default function App() {
                     />
                     {step === 'result' && textDetections.map((boxData, index) => (
                        <BoundingBox key={index} boxData={boxData} imageRef={imageRef} />
+                    ))}
+                     {step === 'recomposed' && textDetections.map((boxData, index) => (
+                        <TextBox key={index} boxData={boxData} imageRef={imageRef} />
                     ))}
                     <button 
                         onClick={handleReset} 
