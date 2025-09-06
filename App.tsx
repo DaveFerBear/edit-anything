@@ -1,6 +1,16 @@
-
 import React, { useState, useEffect, useRef } from 'react';
 import { GoogleGenAI, Type, Modality } from "@google/genai";
+import { fal } from "@fal-ai/client";
+
+// --- FAL AI CONFIG ---
+// Configure the fal-ai client with credentials from environment variables.
+if (process.env.FAL_API_KEY) {
+  fal.config({
+    credentials: process.env.FAL_API_KEY,
+  });
+} else {
+  console.warn("FAL_API_KEY is not set in your environment variables. Image segmentation will fail.");
+}
 
 // --- TYPE DEFINITIONS ---
 type TextDetectionData = {
@@ -123,6 +133,10 @@ export default function App() {
   const [isConsolidating, setIsConsolidating] = useState(false);
   const [decompositionStatus, setDecompositionStatus] = useState('');
   
+  const [segmentedImageUrl, setSegmentedImageUrl] = useState<string | null>(null);
+  const [segmentationStatus, setSegmentationStatus] = useState('');
+  const [segmentationError, setSegmentationError] = useState<string | null>(null);
+
   const imageRef = useRef<HTMLImageElement>(null);
   const imageNaturalSizeRef = useRef({ width: 0, height: 0 });
 
@@ -154,7 +168,7 @@ export default function App() {
         }
         window.removeEventListener('resize', updateRenderedSize);
     };
-  }, [previewUrl]);
+  }, [previewUrl, segmentedImageUrl]); // Re-run when either image changes
 
   const handleReset = () => {
     if (previewUrl && previewUrl.startsWith('blob:')) {
@@ -170,6 +184,9 @@ export default function App() {
     setIsDecomposing(false);
     setIsConsolidating(false);
     setDecompositionStatus('');
+    setSegmentedImageUrl(null);
+    setSegmentationStatus('');
+    setSegmentationError(null);
     const fileInput = document.getElementById('file-upload') as HTMLInputElement;
     if(fileInput) {
         fileInput.value = '';
@@ -188,6 +205,89 @@ export default function App() {
     }
   };
 
+  const runTextDetection = async (file: File) => {
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    const imagePart = await fileToGenerativePart(file);
+
+    const textPrompt = `
+    Output a json list where each entry contains the 2D bounding box in "box_2d", the text content in "label", and the text color in "color". The bounding box coordinates should be normalized to the image dimensions (0-1000).
+    Here's what the response should look like: { "box_2d": [68, 75, 322, 408], "label": "Start working out now", "color": "#0055b3" }
+    `;
+
+    const response = await ai.models.generateContent({
+        model: 'gemini-2.5-flash',
+        contents: {
+            parts: [
+                { inlineData: imagePart },
+                { text: textPrompt }
+            ]
+        },
+        config: {
+            temperature: 0.5,
+            thinkingConfig: { thinkingBudget: 0 },
+            responseMimeType: "application/json",
+            responseSchema: {
+                type: Type.ARRAY,
+                items: {
+                    type: Type.OBJECT,
+                    properties: {
+                        label: { type: Type.STRING },
+                        color: { type: Type.STRING },
+                        box_2d: {
+                            type: Type.ARRAY,
+                            items: { type: Type.NUMBER },
+                        },
+                    },
+                    required: ["label", "color", "box_2d"]
+                }
+            }
+        }
+    });
+    
+    const jsonString = response.text.trim();
+    const result = JSON.parse(jsonString);
+    
+    if (Array.isArray(result) && result.length > 0) {
+        const normalizedResult = result.map(item => ({
+            ...item,
+            box_2d: item.box_2d.map((val: number) => val / 1000) 
+        }));
+        console.log('Detection Results:', normalizedResult);
+        return normalizedResult;
+    } else {
+        throw new Error("No text could be detected in the image. Please try another one.");
+    }
+  };
+
+  const runSegmentation = async (file: File) => {
+    setSegmentationStatus("Segmenting image...");
+    setSegmentationError(null);
+    try {
+        const imagePart = await fileToGenerativePart(file);
+        const imageUrl = `data:${imagePart.mimeType};base64,${imagePart.data}`;
+        
+        const result: any = await fal.run("fal-ai/fast-semantic-segmentation", {
+            input: {
+                image_url: imageUrl,
+            },
+        });
+        
+        const imageUrlFromResult = result?.image?.url;
+        if (!imageUrlFromResult) {
+            console.error("Unexpected fal-ai result structure:", result);
+            throw new Error("Could not find image URL in segmentation result.");
+        }
+        setSegmentationStatus("Completed.");
+        return imageUrlFromResult;
+    } catch (err) {
+        console.error("Segmentation error:", err);
+        const errorMessage = err instanceof Error ? err.message : "An unknown error occurred.";
+        setSegmentationError(`Segmentation failed: ${errorMessage}`);
+        setSegmentationStatus("Failed.");
+        throw err; // Re-throw for Promise.allSettled to catch as 'rejected'
+    }
+  };
+
   const handleSubmit = async (event: React.MouseEvent<HTMLButtonElement>) => {
       event.preventDefault();
       if (!selectedFile) {
@@ -198,68 +298,32 @@ export default function App() {
       setStep('processing');
       setError(null);
       setTextDetections([]);
+      setSegmentedImageUrl(null);
+      setSegmentationError(null);
+      setSegmentationStatus('');
 
-      try {
-          const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-          const imagePart = await fileToGenerativePart(selectedFile);
+      const [detectionResult, segmentationResult] = await Promise.allSettled([
+          runTextDetection(selectedFile),
+          runSegmentation(selectedFile)
+      ]);
 
-          const textPrompt = `
-          Output a json list where each entry contains the 2D bounding box in "box_2d", the text content in "label", and the text color in "color". The bounding box coordinates should be normalized to the image dimensions (0-1000).
-          Here's what the response should look like: { "box_2d": [68, 75, 322, 408], "label": "Start working out now", "color": "#0055b3" }
-          `;
+      if (detectionResult.status === 'fulfilled') {
+          setTextDetections(detectionResult.value);
+          setStep('result');
+      } else {
+          console.error(detectionResult.reason);
+          setError(detectionResult.reason.message || "An error occurred while detecting text. Please try again.");
+          setStep('upload'); // Revert to upload to allow retry
+      }
 
-          const response = await ai.models.generateContent({
-              model: 'gemini-2.5-flash',
-              contents: {
-                  parts: [
-                      { inlineData: imagePart },
-                      { text: textPrompt }
-                  ]
-              },
-              config: {
-                  temperature: 0.5,
-                  thinkingConfig: { thinkingBudget: 0 },
-                  responseMimeType: "application/json",
-                  responseSchema: {
-                      type: Type.ARRAY,
-                      items: {
-                          type: Type.OBJECT,
-                          properties: {
-                              label: { type: Type.STRING },
-                              color: { type: Type.STRING },
-                              box_2d: {
-                                  type: Type.ARRAY,
-                                  items: { type: Type.NUMBER },
-                              },
-                          },
-                          required: ["label", "color", "box_2d"]
-                      }
-                  }
-              }
-          });
-          
-          const jsonString = response.text.trim();
-          const result = JSON.parse(jsonString);
-          
-          if (Array.isArray(result) && result.length > 0) {
-              const normalizedResult = result.map(item => ({
-                  ...item,
-                  box_2d: item.box_2d.map((val: number) => val / 1000) 
-              }));
-              console.log('Detection Results:', normalizedResult);
-              setTextDetections(normalizedResult);
-              setStep('result');
-          } else {
-               setError("No text could be detected in the image. Please try another one.");
-               setStep('result');
-          }
-
-      } catch (err) {
-          console.error(err);
-          setError("An error occurred while detecting text. Please try again.");
-          setStep('upload');
+      if (segmentationResult.status === 'fulfilled') {
+          setSegmentedImageUrl(segmentationResult.value);
+      } else {
+          console.error(segmentationResult.reason);
+          // Error state is handled within runSegmentation
       }
   };
+
 
   const handleConsolidate = async () => {
     if (!selectedFile || textDetections.length === 0) {
@@ -524,7 +588,7 @@ ${JSON.stringify(detectionsForPrompt, null, 2)}
             className="w-full max-w-md bg-blue-800 text-white font-bold py-3 px-6 rounded-lg text-lg shadow-lg flex items-center justify-center transition-all duration-300 ease-in-out"
           >
             <Spinner />
-            Detecting Text...
+            Processing Image...
           </button>
         );
       case 'recomposed':
@@ -596,31 +660,54 @@ ${JSON.stringify(detectionsForPrompt, null, 2)}
             </label>
           ) : (
             <div className="flex flex-col items-center gap-6">
-                <div 
-                    className="relative w-full max-w-md"
-                >
-                    <img 
-                      ref={imageRef} 
-                      src={previewUrl!} 
-                      alt="Image preview" 
-                      className="rounded-lg shadow-2xl w-full h-auto block"
-                    />
-                    {imageRenderedSize.width > 0 && step === 'result' && textDetections.map((boxData, index) => (
-                       <OverlayComponent key={index} boxData={boxData} renderedSize={imageRenderedSize} isBoundingBox />
-                    ))}
-                     {imageRenderedSize.width > 0 && step === 'recomposed' && textDetections.map((boxData, index) => (
-                        <OverlayComponent 
-                            key={index} 
-                            boxData={boxData} 
-                            renderedSize={imageRenderedSize}
-                            imageNaturalSize={imageNaturalSizeRef.current}
-                        >
-                           {boxData.label}
-                        </OverlayComponent>
-                    ))}
+                 <div className="grid grid-cols-1 gap-6 w-full relative">
+                    {/* Panel 1: Original Image + Overlays */}
+                    <div className="w-full">
+                        <h2 className="text-lg font-semibold text-center mb-2">Original with Detections</h2>
+                        <div className="relative aspect-square bg-gray-700 rounded-lg flex items-center justify-center">
+                            <img 
+                                ref={imageRef} 
+                                src={previewUrl!} 
+                                alt="Image preview" 
+                                className="rounded-lg shadow-2xl max-w-full max-h-full block object-contain"
+                            />
+                            {imageRenderedSize.width > 0 && step === 'result' && textDetections.map((boxData, index) => (
+                            <OverlayComponent key={index} boxData={boxData} renderedSize={imageRenderedSize} isBoundingBox />
+                            ))}
+                            {imageRenderedSize.width > 0 && step === 'recomposed' && textDetections.map((boxData, index) => (
+                                <OverlayComponent 
+                                    key={index} 
+                                    boxData={boxData} 
+                                    renderedSize={imageRenderedSize}
+                                    imageNaturalSize={imageNaturalSizeRef.current}
+                                >
+                                {boxData.label}
+                                </OverlayComponent>
+                            ))}
+                        </div>
+                    </div>
+
+                    {/* Panel 2: Segmented Image */}
+                    <div className="w-full">
+                        <h2 className="text-lg font-semibold text-center mb-2">Segmented Image</h2>
+                        <div className="relative aspect-square bg-gray-700 rounded-lg flex items-center justify-center p-4 text-gray-400">
+                            {step === 'processing' && !segmentedImageUrl && !segmentationError && (
+                                <div className="text-center">
+                                    <Spinner />
+                                    <p className="mt-2">{segmentationStatus || 'Segmenting image...'}</p>
+                                </div>
+                            )}
+                            {(step === 'result' || step === 'recomposed') && segmentationStatus && !segmentationError && (
+                                 <div className="text-center">{segmentationStatus}</div>
+                            )}
+                            {segmentationError && <p className="text-red-400 text-center">{segmentationError}</p>}
+                            {segmentedImageUrl && <img src={segmentedImageUrl} alt="Segmented image" className="rounded-lg shadow-2xl max-w-full max-h-full block object-contain" />}
+                        </div>
+                    </div>
+
                     <button 
                         onClick={handleReset} 
-                        className="absolute -top-3 -right-3 p-1.5 bg-gray-800 text-white rounded-full hover:bg-red-600 hover:scale-110 transition-all duration-200 shadow-lg"
+                        className="absolute -top-4 -right-4 p-1.5 bg-gray-800 text-white rounded-full hover:bg-red-600 hover:scale-110 transition-all duration-200 shadow-lg"
                         aria-label="Remove image"
                     >
                        <XCircleIcon />
