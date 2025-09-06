@@ -120,7 +120,6 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [imageRenderedSize, setImageRenderedSize] = useState({ width: 0, height: 0 });
   const [isDecomposing, setIsDecomposing] = useState(false);
-  const [isConsolidating, setIsConsolidating] = useState(false);
   const [decompositionStatus, setDecompositionStatus] = useState('');
   
   const imageRef = useRef<HTMLImageElement>(null);
@@ -168,7 +167,6 @@ export default function App() {
     setImageRenderedSize({ width: 0, height: 0 });
     imageNaturalSizeRef.current = { width: 0, height: 0 };
     setIsDecomposing(false);
-    setIsConsolidating(false);
     setDecompositionStatus('');
     const fileInput = document.getElementById('file-upload') as HTMLInputElement;
     if(fileInput) {
@@ -247,7 +245,13 @@ export default function App() {
                   box_2d: item.box_2d.map((val: number) => val / 1000) 
               }));
               console.log('Detection Results:', normalizedResult);
-              setTextDetections(normalizedResult);
+              
+              // Automatically run consolidation after text detection
+              console.log('Running automatic consolidation...');
+              const consolidatedResult = await consolidateDetections(normalizedResult, selectedFile);
+              console.log('Consolidation Results:', consolidatedResult);
+              
+              setTextDetections(consolidatedResult);
               setStep('result');
           } else {
                setError("No text could be detected in the image. Please try another one.");
@@ -261,20 +265,16 @@ export default function App() {
       }
   };
 
-  const handleConsolidate = async () => {
-    if (!selectedFile || textDetections.length === 0) {
-      setError("No text detections to consolidate.");
-      return;
+  const consolidateDetections = async (detections: TextDetectionData[], file: File): Promise<TextDetectionData[]> => {
+    if (detections.length === 0) {
+      return detections;
     }
-    
-    setIsConsolidating(true);
-    setError(null);
 
     try {
         const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-        const imagePart = await fileToGenerativePart(selectedFile);
+        const imagePart = await fileToGenerativePart(file);
 
-        const detectionsForPrompt = textDetections.map((d, index) => ({
+        const detectionsForPrompt = detections.map((d, index) => ({
             index,
             label: d.label,
             box_2d: d.box_2d.map(coord => Math.round(coord * 1000)),
@@ -322,15 +322,14 @@ ${JSON.stringify(detectionsForPrompt, null, 2)}
 
         if (groups.length === 0) {
             console.log("Consolidation did not result in any new groups.");
-            setIsConsolidating(false);
-            return;
+            return detections;
         }
 
         const newDetections: TextDetectionData[] = [];
         const processedIndices = new Set<number>();
 
         for (const group of groups) {
-            const boxesToMerge = group.map(index => textDetections[index]);
+            const boxesToMerge = group.map(index => detections[index]);
             
             if(boxesToMerge.some(b => !b)) continue;
 
@@ -351,21 +350,20 @@ ${JSON.stringify(detectionsForPrompt, null, 2)}
             group.forEach(index => processedIndices.add(index));
         }
 
-        textDetections.forEach((detection, index) => {
+        detections.forEach((detection, index) => {
             if (!processedIndices.has(index)) {
                 newDetections.push(detection);
             }
         });
 
-        setTextDetections(newDetections);
+        return newDetections;
 
     } catch (err) {
-        console.error(err);
-        setError("An error occurred during consolidation. Please try again.");
-    } finally {
-        setIsConsolidating(false);
+        console.error('Consolidation error:', err);
+        return detections;
     }
   };
+
   
   const handleDecompose = async () => {
     if (!selectedFile || textDetections.length === 0) {
@@ -406,21 +404,26 @@ ${JSON.stringify(detectionsForPrompt, null, 2)}
                 if (!ctx) throw new Error("Could not get canvas context");
                 ctx.drawImage(image, cropX, cropY, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight);
                 
-                const dataUrl = canvas.toDataURL('image/png');
-                const base64Data = dataUrl.split(',')[1];
-                const imagePart = { inlineData: { mimeType: 'image/png', data: base64Data } };
+                const cropDataUrl = canvas.toDataURL('image/png');
+                const cropBase64Data = cropDataUrl.split(',')[1];
+                const croppedImagePart = { inlineData: { mimeType: 'image/png', data: cropBase64Data } };
+                
+                // Also get the original full image
+                const originalImagePart = await fileToGenerativePart(selectedFile);
 
                 const fontList = "Arial, Helvetica, Verdana, Tahoma, Trebuchet MS, Roboto, Open Sans, Lato, Montserrat, Nunito, Times New Roman, Georgia, Merriweather, Playfair Display, Source Serif Pro, Courier New, Consolas, Roboto Mono, Poppins, Raleway";
-                const prompt = `Analyze the text in this image. Provide its properties as a JSON object including:
+                const prompt = `I'm providing two images: first is the original full image, and second is a cropped section containing specific text. Analyze the text in the cropped section and provide its properties as a JSON object including:
 - "fontSize": The font size in pixels.
 - "fontFamily": The name of the font family. Choose the closest match from the following list: ${fontList}. If none are a close match, provide another common web font name. Only as a last resort, use a generic description like "serif" or "sans-serif".
 - "color": The hex code for the text color.
-- "textAlign": The alignment of the text ("left", "center", or "right").`;
+- "textAlign": The alignment of the text ("left", "center", or "right").
+
+Use the context from the full image to better understand the text styling and make more accurate assessments.`;
                 
                 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
                 const response = await ai.models.generateContent({
                     model: 'gemini-2.5-flash',
-                    contents: { parts: [imagePart, { text: prompt }] },
+                    contents: { parts: [{ inlineData: originalImagePart }, croppedImagePart, { text: prompt }] },
                     config: {
                         temperature: 0.1,
                         thinkingConfig: { thinkingBudget: 0 },
@@ -514,7 +517,7 @@ ${JSON.stringify(detectionsForPrompt, null, 2)}
   }, [previewUrl]);
 
   const getButton = () => {
-    const anyProcessRunning = isConsolidating || isDecomposing;
+    const anyProcessRunning = isDecomposing;
 
     switch (step) {
       case 'processing':
@@ -539,16 +542,6 @@ ${JSON.stringify(detectionsForPrompt, null, 2)}
       case 'result':
         return (
             <div className="w-full max-w-md flex flex-col gap-4">
-                 <div className="flex flex-col sm:flex-row gap-4">
-                    <button
-                        onClick={handleConsolidate}
-                        disabled={anyProcessRunning || textDetections.length < 2}
-                        className="flex-1 bg-indigo-600 text-white font-bold py-3 px-6 rounded-lg text-lg shadow-lg hover:bg-indigo-700 focus:outline-none focus:ring-4 focus:ring-indigo-500 focus:ring-opacity-50 transition-all duration-300 ease-in-out transform hover:-translate-y-1 flex items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none"
-                    >
-                        {isConsolidating ? <Spinner /> : null}
-                        {isConsolidating ? 'Consolidating...' : 'Consolidate Text'}
-                    </button>
-                </div>
                 <div className="flex flex-col sm:flex-row gap-4">
                     <button
                         onClick={handleDecompose}
