@@ -5,18 +5,21 @@
 ## ✨ Features
 
 ### 🎯 **Smart Text Detection & Analysis**
+
 - **Automatic text detection** with bounding box visualization
 - **Intelligent consolidation** groups related text blocks by color
 - **Font property analysis** detects size, family, color, alignment, and rotation
 - **Two-pass text removal** ensures complete background cleaning
 
 ### 🖊️ **Interactive Text Editing**
+
 - **Click-to-edit** any detected text inline
 - **Drag & drop** text boxes to reposition them
 - **Resize handles** for adjusting text box dimensions
 - **Real-time preview** of all modifications
 
 ### 📤 **Professional Export**
+
 - **High-quality composite** downloads at original resolution
 - **Perfect text rendering** matches preview exactly
 - **PNG format** with transparency support
@@ -33,7 +36,7 @@
 ## 🛠️ **Technical Stack**
 
 - **React + TypeScript** for the frontend
-- **Google Gemini AI** for text detection and image processing  
+- **Google Gemini AI** for text detection and image processing
 - **HTML5 Canvas** for precise text rendering and export
 - **Vite** for build tooling
 - **Tailwind CSS** for styling
@@ -81,6 +84,7 @@ edit-anything/
 ## 🤝 **Contributing**
 
 Pull requests welcome! This project uses:
+
 - TypeScript for type safety
 - ESLint for code quality
 - Tailwind for styling
@@ -89,3 +93,7 @@ Pull requests welcome! This project uses:
 ---
 
 **Edit Anything** - Because sometimes you just need to change that one word in a perfect design. ✨
+
+### Model confusion matrix
+
+![Confusion Matrix (row-normalized)](ml/confusion-matrix.png)
