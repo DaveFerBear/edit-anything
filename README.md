@@ -2,16 +2,7 @@
 
 **Edit Anything** is an AI-powered text editing tool that lets you extract, modify, and recompose text in any image while preserving the original design.
 
-<div align="center">
-  <iframe
-    src="https://www.loom.com/embed/6822884a8b60459cac29ad2ac10d38d8"
-    frameborder="0"
-    webkitallowfullscreen
-    mozallowfullscreen
-    allowfullscreen
-    style="width:100%;max-width:800px;height:450px;border-radius:12px"
-  ></iframe>
-</div>
+[![Watch demo](https://img.shields.io/badge/Watch%20demo-Loom-ff4e45?logo=loom&logoColor=white)](https://www.loom.com/share/6822884a8b60459cac29ad2ac10d38d8)
 
 ## ✨ Features
 
