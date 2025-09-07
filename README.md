@@ -2,6 +2,19 @@
 
 **Edit Anything** is an AI-powered text editing tool that lets you extract, modify, and recompose text in any image while preserving the original design.
 
+![Edit Anything demo](https://miro.medium.com/v2/resize:fit:1400/format:webp/1*VM94wVftxP7wkiKo4BjfLA.png)
+
+<div align="center">
+  <iframe
+    src="https://www.loom.com/embed/6822884a8b60459cac29ad2ac10d38d8"
+    frameborder="0"
+    webkitallowfullscreen
+    mozallowfullscreen
+    allowfullscreen
+    style="width:100%;max-width:800px;height:450px;border-radius:12px"
+  ></iframe>
+</div>
+
 ## ✨ Features
 
 ### 🎯 **Smart Text Detection & Analysis**
@@ -33,20 +46,15 @@
 4. **Editing** - Modify, move, resize, or rewrite any text
 5. **Export** - Download the final composed image
 
-## 🛠️ **Technical Stack**
+## Font Detection Model
 
-- **React + TypeScript** for the frontend
-- **Google Gemini AI** for text detection and image processing
-- **HTML5 Canvas** for precise text rendering and export
-- **Vite** for build tooling
-- **Tailwind CSS** for styling
+Fine-tune of Resnet-50 on custom synthetic datadaset (18 fonts, 9k samples).
 
-## 🎨 **Perfect For**
+![Resnet-50 arch](https://miro.medium.com/v2/resize:fit:1400/format:webp/1*VM94wVftxP7wkiKo4BjfLA.png)
 
-- **Designers** creating variations of existing graphics
-- **Marketers** localizing promotional materials
-- **Content creators** updating text in branded images
-- **Anyone** who needs to edit text in images without Photoshop
+## Model confusion matrix
+
+![Confusion Matrix (row-normalized)](ml/confusion-matrix.png)
 
 ## 🏃‍♂️ **Development**
 
@@ -80,20 +88,3 @@ edit-anything/
 ├── App.tsx               # Main application
 └── README.md
 ```
-
-## 🤝 **Contributing**
-
-Pull requests welcome! This project uses:
-
-- TypeScript for type safety
-- ESLint for code quality
-- Tailwind for styling
-- Clean architecture with separated concerns
-
----
-
-**Edit Anything** - Because sometimes you just need to change that one word in a perfect design. ✨
-
-### Model confusion matrix
-
-![Confusion Matrix (row-normalized)](ml/confusion-matrix.png)
