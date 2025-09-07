@@ -2,8 +2,6 @@
 
 **Edit Anything** is an AI-powered text editing tool that lets you extract, modify, and recompose text in any image while preserving the original design.
 
-![Edit Anything demo](https://miro.medium.com/v2/resize:fit:1400/format:webp/1*VM94wVftxP7wkiKo4BjfLA.png)
-
 <div align="center">
   <iframe
     src="https://www.loom.com/embed/6822884a8b60459cac29ad2ac10d38d8"
