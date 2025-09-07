@@ -1,12 +1,14 @@
 from pathlib import Path
 from io import BytesIO
 from typing import List, Optional
+import base64
 
 import torch
 import torch.nn as nn
 from PIL import Image
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 
 
 app = FastAPI(title="Font Classifier API", version="0.1.0")
@@ -55,6 +57,10 @@ model: Optional[nn.Module] = None
 tfms = None
 
 
+class PredictB64(BaseModel):
+    image_b64: str
+
+
 @app.on_event("startup")
 def startup() -> None:
     global device, classes, model, tfms
@@ -77,19 +83,9 @@ def health() -> JSONResponse:
     return JSONResponse({"status": "ok"})
 
 
-@app.post("/predict")
-def predict(image: UploadFile = File(...)) -> JSONResponse:
+def _predict_from_pil(img: Image.Image) -> JSONResponse:
     if model is None or classes is None or tfms is None or device is None:
         raise HTTPException(status_code=503, detail="Model not ready")
-
-    if not image.content_type or not image.content_type.startswith("image/"):
-        raise HTTPException(status_code=400, detail="Please upload an image file")
-
-    try:
-        raw = image.file.read()
-        img = Image.open(BytesIO(raw)).convert("RGB")
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Invalid image: {e}")
 
     with torch.no_grad():
         batch = tfms(img).unsqueeze(0).to(device)
@@ -110,6 +106,36 @@ def predict(image: UploadFile = File(...)) -> JSONResponse:
     top_font = classes[top_idx]
 
     return JSONResponse({"font": top_font, "confidence": top_conf})
+
+
+@app.post("/predict")
+def predict(image: UploadFile = File(...)) -> JSONResponse:
+    if not image.content_type or not image.content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="Please upload an image file")
+
+    try:
+        raw = image.file.read()
+        img = Image.open(BytesIO(raw)).convert("RGB")
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid image: {e}")
+
+    return _predict_from_pil(img)
+
+
+@app.post("/predict_b64")
+def predict_b64(body: PredictB64) -> JSONResponse:
+    data_str = body.image_b64.strip()
+    if "," in data_str and ";base64" in data_str:
+        # Support data URLs like: data:image/png;base64,XXXX
+        data_str = data_str.split(",", 1)[1]
+
+    try:
+        raw = base64.b64decode(data_str, validate=True)
+        img = Image.open(BytesIO(raw)).convert("RGB")
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid base64 image: {e}")
+
+    return _predict_from_pil(img)
 
 
 if __name__ == "__main__":
